@@ -243,6 +243,17 @@ Facts behind it, all measured rather than assumed:
   insert/delete lines and characters, scroll regions, the alternate screen (so
   `vim` and `htop` work), save/restore cursor, autowrap with deferred wrap,
   tab stops, reverse index, and SGR including 256-colour and 24-bit.
+- **The parse loop must advance on every byte, including ones it ignores.**
+  `feed`'s `default` branch scans forward to the next control byte, but
+  `isControl` is true for *everything* under `0x20` while the `switch` only has
+  cases for `0x00`, `0x07`–`0x0D` and `0x1B`. Any other C0 byte therefore left
+  `end == index`, and `index = end` made no progress: the main thread spun on
+  one byte forever, needing no further input to keep going. A Claude Code
+  session froze the app this way; a shell and a dev server never emit those
+  bytes, so it looked solid for months. Diagnosed from the child sitting at 0%
+  CPU while the app held a core — output volume cannot do that. The profile
+  blamed an `Array` allocation, which was the empty array being allocated
+  inside the spin, not the cause.
 - **No `COLUMNS`/`LINES` in the environment.** The pty's window size is the
   truth and the shell keeps it current on SIGWINCH; exporting them just creates
   a second copy that goes stale on the first resize.
@@ -543,3 +554,14 @@ poller against a real project board, then try one dispatch.
 - Do not build the SwiftUI clients before phase 5. The web dashboard comes first,
   deliberately — it renders in days rather than weeks, and redesigning HTML is
   cheaper than redesigning SwiftUI.
+
+<!-- workflow-manager:begin -->
+## Claude WM
+
+This repository is tracked on a Claude WM board. `.taskboard/tasks.json`
+is the shared task list: rows with `"requested": true` are work assigned to
+you, and you report progress by setting a row's `status` to `in_progress`
+when you start and `review` when you open a PR.
+
+Read `.taskboard/README.md` for the full contract before touching that file.
+<!-- workflow-manager:end -->

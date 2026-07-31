@@ -249,17 +249,45 @@ nonisolated struct TerminalEmulator {
                 index += 1
 
             default:
+                // The run of printable bytes up to the next control byte, kept
+                // as a *slice*. `Array(bytes[index..<end])` copied every run,
+                // which measures at ~20% of parse time in a release build and
+                // buys nothing: `String(decoding:as:)` takes any collection of
+                // UInt8. Worth having, but note it is not why this loop once
+                // pinned a core — see the guard below for that.
                 var end = index
                 while end < bytes.count, !isControl(bytes[end]) { end += 1 }
-                let slice = Array(bytes[index..<end])
 
-                if end == bytes.count, let hold = incompleteUTF8Suffix(slice) {
-                    let keep = slice.count - hold
-                    if keep > 0 { put(String(decoding: slice[0..<keep], as: UTF8.self)) }
-                    pending = Array(slice[keep...])
+                // A C0 control byte with no `case` of its own above — 0x01–0x06,
+                // 0x0E–0x1A, 0x1C–0x1F. `isControl` is true for it, so the scan
+                // stopped where it started and `end == index`; falling through
+                // to `index = end` would make no progress and spin this loop on
+                // one byte forever, on the main thread, with no further input
+                // needed to keep it going. Skip it, as a terminal ignores a
+                // control code it does not implement.
+                //
+                // This is how a Claude Code session froze the app: its TUI emits
+                // one of these, and from that byte on the drain task never
+                // returned. The giveaway was the child sitting at 0% CPU while
+                // the app held a core.
+                guard end > index else {
+                    index += 1
+                    continue
+                }
+
+                let run = bytes[index..<end]
+
+                if end == bytes.count, let hold = incompleteUTF8Suffix(run) {
+                    // Hold back the truncated scalar for the next chunk. Only
+                    // this tail is copied, and it is never more than 3 bytes.
+                    let split = end - hold
+                    if split > index {
+                        put(String(decoding: bytes[index..<split], as: UTF8.self))
+                    }
+                    pending = Array(bytes[split..<end])
                     return
                 }
-                put(String(decoding: slice, as: UTF8.self))
+                put(String(decoding: run, as: UTF8.self))
                 index = end
             }
         }
@@ -684,17 +712,26 @@ nonisolated struct TerminalEmulator {
         (0x30...0x3F).contains(byte) || (0x20...0x2F).contains(byte)
     }
 
-    private func incompleteUTF8Suffix(_ bytes: [UInt8]) -> Int? {
-        var index = bytes.count - 1
+    /// Generic over the collection so `feed` can hand it an `ArraySlice`
+    /// directly. Taking a concrete `[UInt8]` is what used to force the copy.
+    ///
+    /// Indices are walked through `startIndex`/`index(before:)` rather than
+    /// integers: a slice's indices are offsets into its *parent*, so `count - 1`
+    /// would address the wrong byte — or trap — for every run but the first.
+    private func incompleteUTF8Suffix(_ bytes: some RandomAccessCollection<UInt8>) -> Int? {
+        var position = bytes.endIndex
         var continuations = 0
-        while index >= 0, bytes[index] & 0b1100_0000 == 0b1000_0000 {
+        while position > bytes.startIndex {
+            let previous = bytes.index(before: position)
+            guard bytes[previous] & 0b1100_0000 == 0b1000_0000 else { break }
             continuations += 1
-            index -= 1
+            position = previous
             if continuations > 3 { return nil }
         }
-        guard index >= 0 else { return nil }
+        // Every byte was a continuation: no lead, nothing to reason about.
+        guard position > bytes.startIndex else { return nil }
 
-        let lead = bytes[index]
+        let lead = bytes[bytes.index(before: position)]
         let needed: Int
         if lead & 0b1000_0000 == 0 { needed = 0 }
         else if lead & 0b1110_0000 == 0b1100_0000 { needed = 1 }
