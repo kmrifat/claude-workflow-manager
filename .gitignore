@@ -1,0 +1,42 @@
+# Build output
+.build/
+.xcbuild/
+DerivedData/
+build/
+*.o
+*.hmap
+*.ipa
+*.xcarchive
+*.dSYM.zip
+*.dSYM
+
+# Xcode user state
+# `xcuserdata/` was added after the initial commit, which had already tracked
+# xcschememanagement.plist — an ignore rule does not apply to a tracked file, so
+# that one had to be `git rm --cached`'d as well.
+xcuserdata/
+*.xcuserstate
+*.xcuserdatad/
+*.moved-aside
+*.perspectivev3
+*.xccheckout
+*.xcscmblueprint
+
+# Swift Package Manager
+# NOTE: Packages/ holds WorkflowHost's source and must NOT be ignored.
+# Package.resolved is checked in — this is an application, not a library.
+.swiftpm/
+
+# WorkflowHost local state (never committed; db.sqlite is disposable)
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+
+# Per-machine Claude Code settings. Kept out of the repo on purpose: the shared
+# instructions live in CLAUDE.md, while settings.local.json is one developer's
+# permission grants. A global ~/.config/git/ignore rule covers this on some
+# machines but not on a fresh clone, so state it here too.
+.claude/settings.local.json
+
+# macOS
+.DS_Store
