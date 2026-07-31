@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!--
+	  Lives at the repo root, not in ClaudeWMMobile/, for the same reason the
+	  Mac's Info.plist does: that folder is a PBXFileSystemSynchronizedRootGroup,
+	  so a plist inside it would also be copied into the bundle as a stray
+	  resource.
+	-->
+
+	<key>CFBundleDisplayName</key>
+	<string>Claude WM</string>
+
+	<!--
+	  BOTH of the next two keys are required, and missing either one fails
+	  *silently*: NWBrowser reports no results and no error, which is
+	  indistinguishable from the Mac not running. iOS 14+ gates the local network
+	  behind a permission prompt that is only shown if the usage description is
+	  present, and only allows the service types listed here.
+	-->
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Claude WM finds your Mac on this Wi-Fi network to show and edit your boards. Nothing is sent over the internet.</string>
+
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_claudewm._tcp</string>
+	</array>
+
+	<!--
+	  So the camera app can hand a scanned `claudewm://pair?d=…` code straight to
+	  us. This is why there is no QR scanner in the app: the system already has
+	  one, and it works from the lock screen.
+	-->
+	<key>CFBundleURLTypes</key>
+	<array>
+		<dict>
+			<key>CFBundleURLName</key>
+			<string>com.binarycastle.claude-wm-mobile.pair</string>
+			<key>CFBundleURLSchemes</key>
+			<array>
+				<string>claudewm</string>
+			</array>
+		</dict>
+	</array>
+
+	<key>UILaunchScreen</key>
+	<dict/>
+
+	<key>UISupportedInterfaceOrientations</key>
+	<array>
+		<string>UIInterfaceOrientationPortrait</string>
+	</array>
+</dict>
+</plist>

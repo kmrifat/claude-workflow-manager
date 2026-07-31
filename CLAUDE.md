@@ -293,6 +293,74 @@ is false for *every* subfolder. `TerminalCommand.path(_:isInside:)` strips it
 first. This one is nasty because it fails silently and looks exactly like the
 path-escape rejection it is meant to be.
 
+## The phone client
+
+`ClaudeWMMobile` is a second target in the *same* Xcode project — not a second
+project, and emphatically not `Apps/MobileClient`, which is a slot for a client
+of the **WorkflowHost daemon**, a different product on the other side of the
+wall. Putting it there would couple the two products together.
+
+**LAN only, and the Mac serves.** The phone talks to Claude WM directly over the
+local network: no account, no server, nothing leaves the Wi-Fi. CloudKit was the
+obvious alternative and is unavailable — iCloud entitlements require the App
+Sandbox, which this app cannot have.
+
+Off by default, started from **Phone Access…**. Opening a listening socket on
+someone's network is not something to do quietly.
+
+- **TLS-PSK, not a self-signed certificate.** Generating an X.509 in-process on
+  macOS means hand-assembling DER, and leaves a certificate to expire and store.
+  With a pre-shared key the QR code is both the credential and the identity:
+  nothing to pin, one secret instead of two that can drift. A peer without the
+  key cannot complete a handshake, so unpaired clients never reach app code —
+  verified, not assumed. Rotating the key is the whole revocation story, and it
+  is all-or-nothing because there is one key.
+- **WebSocket only, no HTTP.** Vapor cannot be a dependency of this target, and
+  `NWProtocolWebSocket` already implements the handshake and framing a
+  hand-written HTTP server would have to reproduce. Every frame names its type.
+- **The client must dial an `NWEndpoint.url`, not host+port.** The upgrade is an
+  HTTP request needing a path and a `Host` header. Host+port completes the TLS
+  handshake and *then* aborts with `POSIX 53`, which reads exactly like a key
+  problem and is not one.
+- **`NSLocalNetworkUsageDescription` and `NSBonjourServices` are both
+  required**, and missing either fails *silently*: `NWBrowser` returns no results
+  and no error, indistinguishable from the Mac not running.
+- **The phone never writes `tasks.json`.** It sends an intent, the Mac mutates
+  SwiftData, and the existing sync writes the file. That keeps `Writer` at
+  `app | claude` — which matters because its decoder maps an unrecognised writer
+  to `.claude`, and `.claude` owns `status`, `branch` and `prUrl`. A third writer
+  would silently inherit the agent's field ownership. For the same reason the
+  mutation vocabulary has no spelling for `branch` or `prUrl` at all; a test
+  asserts it.
+- **Rules are enforced on the Mac, not trusted to the client.** A blocked card
+  cannot be sent to Claude from the phone: a stale phone may not know a blocker
+  was added a second ago.
+- **`BoardTransport` duplicates `BoardServer`'s parameters on purpose.**
+  `ClaudeWMWire` must stay I/O-free, so it cannot import Network. Change one and
+  you must change the other in the same commit; the loopback harness builds a
+  client against the real server to catch drift.
+- **A rejected optimistic edit needs a *forced* snapshot.** A refused mutation
+  leaves the server's board unchanged, so a normal request carrying the phone's
+  revision is answered "you are up to date" — and the phone shows the rejected
+  edit permanently. The revision optimisation assumes our copy is right, which
+  is exactly what a rejection disproves.
+- `createCard` has no optimistic form. The Mac mints ids, and guessing one
+  produces a card that vanishes and reappears with a different identity.
+
+Board sync is owned by `WorkflowSyncCoordinator` at app level, not by
+`ProjectDetailView`. It used to be the view: `.task(id:)` started sync,
+`.onDisappear` stopped it, `.onChange` wrote the file — so a project you were not
+looking at was not synced **at all**. Invisible while the only way to change a
+board was to look at it; fatal the moment a phone can. The coordinator is driven
+by `ModelContext.didSave`, which catches every path that changes a board, and it
+is the single publisher of "this board changed" — two publishers sent every phone
+edit twice.
+
+**`ModelContext.didSave` is delivered synchronously on the posting thread.** So a
+phone mutation's own `context.save()` runs `reconcile` *before* the mutation
+handler gets its turn. Ordering the callers would be fragile; instead a revision
+is announced at most once, by whoever notices first.
+
 ## The app's Claude integration
 
 The app starts a Claude Code Remote Control server in a linked repo and mirrors
