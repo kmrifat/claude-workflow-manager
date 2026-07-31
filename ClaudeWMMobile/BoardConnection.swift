@@ -157,10 +157,23 @@ final class BoardConnection {
     // MARK: - Reading
 
     private nonisolated func receive(on connection: NWConnection) {
-        connection.receiveMessage { [weak self] data, context, _, error in
+        connection.receiveMessage { [weak self] data, context, isComplete, error in
             guard let self else { return }
             if error != nil {
                 Task { @MainActor in self.dropped(reason: "The connection to your Mac was lost.") }
+                return
+            }
+            // End of stream. This is *not* an error and there is no close frame:
+            // the peer's socket simply went away — the Mac slept, the app was
+            // force-quit, the process died. Re-arming the receive here (which is
+            // what ignoring this case does) leaves the phone showing a healthy
+            // board forever, with no hint that nothing behind it is live.
+            //
+            // Missed by the loopback harness because `server.stop()` cancels
+            // connections, which surfaces as an error. Only killing the process
+            // produces a bare FIN, and only running it on a simulator found it.
+            if data == nil, error == nil, isComplete {
+                Task { @MainActor in self.dropped(reason: "Your Mac went away.") }
                 return
             }
             if let metadata = context?.protocolMetadata(definition: NWProtocolWebSocket.definition)
