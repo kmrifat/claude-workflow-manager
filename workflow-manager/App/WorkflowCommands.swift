@@ -18,6 +18,7 @@ extension Notification.Name {
     /// Carries `["itemID": uuidString]` — start a Claude session for that card.
     static let startClaudeForItem = Notification.Name("startClaudeForItem")
     static let helpRequested = Notification.Name("helpRequested")
+    static let phoneAccessRequested = Notification.Name("phoneAccessRequested")
 }
 
 struct WorkflowCommands: Commands {
@@ -61,6 +62,14 @@ struct WorkflowCommands: Commands {
                     KeyEquivalent(Character("\(index + 1)")),
                     modifiers: [.command, .option]
                 )
+            }
+        }
+
+        // Not in the board's view-mode group: this is about the app as a whole,
+        // not about what one project is showing.
+        CommandGroup(after: .appSettings) {
+            Button("Phone Access…") {
+                NotificationCenter.default.post(name: .phoneAccessRequested, object: nil)
             }
         }
 

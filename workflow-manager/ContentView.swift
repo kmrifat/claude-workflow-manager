@@ -23,6 +23,12 @@ struct ContentView: View {
     @State private var filesStore = FilesStateStore()
     @State private var terminalStore = TerminalStateStore()
     @State private var showsHelp = false
+    @State private var showsPhoneAccess = false
+
+    /// Owned here rather than by the sharing sheet, for the same reason terminal
+    /// sessions are owned by `ProjectDetailView`: closing the window that
+    /// configured it must not drop the connections.
+    @State private var boardServer = BoardServer()
 
     @Environment(\.modelContext) private var context
 
@@ -74,6 +80,12 @@ struct ContentView: View {
         }
         .sheet(isPresented: $showsHelp) {
             HelpGuideView()
+        }
+        .onReceive(NotificationCenter.default.publisher(for: .phoneAccessRequested)) { _ in
+            showsPhoneAccess = true
+        }
+        .sheet(isPresented: $showsPhoneAccess) {
+            BoardSharingView(server: boardServer)
         }
     }
 }

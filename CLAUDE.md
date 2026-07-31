@@ -22,6 +22,16 @@ group scoped to `workflow-manager/`, so files added under `Packages/` are never
 picked up by it — don't add a synchronized group at the repo root, which would
 break that.
 
+There is a *third* package, `Wire/`, and it does not weaken that rule. It holds
+`ClaudeWMWire`, the types Claude WM and its iOS client both speak, and it lives
+on the app's side of the wall: it is outside `Packages/`, it may never depend on
+`WorkflowCore`, and nothing under `Packages/` may depend on it. The only
+permitted consumers are the targets of `workflow-manager.xcodeproj`. Duplicating
+those types instead — the `GitHubIssue` precedent — was rejected because that
+precedent turns on the two copies being genuinely different things; these would
+be one type written twice, and the drift would surface as a decode failure on a
+phone. Keep it dependency-free and I/O-free, like `WorkflowCore`.
+
 Both reach GitHub, and they do it differently on purpose: the host uses
 `URLSession` with a PAT because it runs headless and needs Projects v2 via
 GraphQL; the app shells out to `gh`, which already holds the user's auth, so the

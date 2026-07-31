@@ -6,6 +6,10 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		35DC1462301BDB93003C98BC /* ClaudeWMWire in Frameworks */ = {isa = PBXBuildFile; productRef = 35DC1461301BDB93003C98BC /* ClaudeWMWire */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXFileReference section */
 		35DC1448301BDB93003C98BC /* Claude WM.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Claude WM.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
@@ -23,6 +27,7 @@
 			isa = PBXFrameworksBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				35DC1462301BDB93003C98BC /* ClaudeWMWire in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -65,6 +70,7 @@
 			);
 			name = "workflow-manager";
 			packageProductDependencies = (
+				35DC1461301BDB93003C98BC /* ClaudeWMWire */,
 			);
 			productName = "workflow-manager";
 			productReference = 35DC1448301BDB93003C98BC /* Claude WM.app */;
@@ -94,6 +100,9 @@
 			);
 			mainGroup = 35DC143F301BDB93003C98BC;
 			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				35DC1460301BDB93003C98BC /* XCLocalSwiftPackageReference "Wire" */,
+			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 35DC1449301BDB93003C98BC /* Products */;
 			projectDirPath = "";
@@ -333,6 +342,20 @@
 			defaultConfigurationName = Release;
 		};
 /* End XCConfigurationList section */
+
+/* Begin XCLocalSwiftPackageReference section */
+		35DC1460301BDB93003C98BC /* XCLocalSwiftPackageReference "Wire" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = Wire;
+		};
+/* End XCLocalSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		35DC1461301BDB93003C98BC /* ClaudeWMWire */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = ClaudeWMWire;
+		};
+/* End XCSwiftPackageProductDependency section */
 	};
 	rootObject = 35DC1440301BDB93003C98BC /* Project object */;
 }
