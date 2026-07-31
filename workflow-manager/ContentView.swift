@@ -7,6 +7,7 @@
 
 import SwiftUI
 import SwiftData
+import ClaudeWMWire
 
 struct ContentView: View {
     @Query(sort: \Project.sortOrder) private var projects: [Project]
@@ -29,6 +30,15 @@ struct ContentView: View {
     /// sessions are owned by `ProjectDetailView`: closing the window that
     /// configured it must not drop the connections.
     @State private var boardServer = BoardServer()
+
+    /// App-level, not per-project: a board that is not on screen still has to
+    /// reach `.taskboard/tasks.json`, and a phone can change one at any time.
+    @State private var syncCoordinator = WorkflowSyncCoordinator()
+
+    /// Held strongly: `BoardServer.handler` is weak, so nothing else keeps the
+    /// service alive and the phone would connect to a server that answers
+    /// nothing.
+    @State private var boardService: BoardService?
 
     @Environment(\.modelContext) private var context
 
@@ -80,6 +90,26 @@ struct ContentView: View {
         }
         .sheet(isPresented: $showsHelp) {
             HelpGuideView()
+        }
+        .environment(syncCoordinator)
+        .task {
+            syncCoordinator.start(context: context)
+
+            let service = BoardService(context: context)
+            service.didMutate = { syncCoordinator.boardChanged($0) }
+            boardServer.handler = service
+            boardService = service
+
+            // One publisher for "this board changed", covering edits from the
+            // Mac, from a phone, and from an agent's merge alike. Phones compare
+            // the revision against their own and ask for a snapshot only if it
+            // differs, so an idle phone costs one integer per change.
+            syncCoordinator.onBoardChanged = { project in
+                boardServer.broadcast(.event(
+                    projectID: project.uuid.uuidString,
+                    revision: BoardSnapshotBuilder.revision(of: project)
+                ))
+            }
         }
         .onReceive(NotificationCenter.default.publisher(for: .phoneAccessRequested)) { _ in
             showsPhoneAccess = true

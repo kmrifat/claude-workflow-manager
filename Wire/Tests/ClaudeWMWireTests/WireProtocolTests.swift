@@ -156,3 +156,41 @@ func everyMutationRoundTrips(_ mutation: BoardMutation) throws {
     #expect(!spellings.contains { $0.lowercased().contains("branch") })
     #expect(!spellings.contains { $0.lowercased().contains("prurl") })
 }
+
+// MARK: - Timestamp resolution
+
+@Test func wireTimestampsAreSecondResolution() throws {
+    // Pinned, not incidental. Anything comparing snapshots must use `revision`,
+    // because a round trip is lossy below a second — and the failure would
+    // otherwise look like "the board keeps changing on its own".
+    let fractional = Date(timeIntervalSince1970: 1_760_000_000.6)
+    let card = WireCard(id: "C", title: "T", updatedAt: fractional)
+    let decoded = try JSONDecoder.wireLike.decode(
+        WireCard.self, from: JSONEncoder.wireLike.encode(card)
+    )
+    #expect(decoded.updatedAt != fractional)
+    #expect(decoded.updatedAt == Date(timeIntervalSince1970: 1_760_000_000))
+
+    // Whole seconds do survive, which is why the round-trip tests above hold.
+    let whole = WireCard(id: "C", title: "T", updatedAt: Date(timeIntervalSince1970: 1_760_000_000))
+    let wholeBack = try JSONDecoder.wireLike.decode(
+        WireCard.self, from: JSONEncoder.wireLike.encode(whole)
+    )
+    #expect(wholeBack == whole)
+}
+
+private extension JSONEncoder {
+    static var wireLike: JSONEncoder {
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        return encoder
+    }
+}
+
+private extension JSONDecoder {
+    static var wireLike: JSONDecoder {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return decoder
+    }
+}

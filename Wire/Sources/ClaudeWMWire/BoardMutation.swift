@@ -160,6 +160,13 @@ extension BoardMutation: Codable {
 /// phone that retries after a dropped connection can tell "applied twice" from
 /// "applied once" — a retried `createCard` is otherwise indistinguishable from
 /// the user tapping add twice.
+///
+/// **Replies are not in request order, and there is not one per request.** A
+/// mutation produces an `ack` *and* a broadcast `event`, and events for other
+/// people's edits arrive whenever they happen. A client that reads "the next
+/// message" as "the reply" will read the previous mutation's event as this
+/// one's answer and be wrong from then on — quietly, because both are valid
+/// frames. Match on this id.
 public struct MutationRequest: Codable, Sendable, Equatable, Identifiable {
     public var id: String
     public var projectID: String

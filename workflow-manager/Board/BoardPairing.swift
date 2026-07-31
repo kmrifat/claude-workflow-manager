@@ -89,6 +89,14 @@ enum BoardPairing {
         return SecItemAdd(attributes as CFDictionary, nil) == errSecSuccess
     }
 
+    /// How the key is spelled in a `hello` frame: base64, because the wire is
+    /// JSON. A helper rather than a convention, so the Mac and the phone cannot
+    /// disagree about it — a mismatch here fails *after* a successful TLS
+    /// handshake, which is a confusing place to land.
+    static func helloToken(for key: Data) -> String {
+        key.base64EncodedString()
+    }
+
     /// Existing key, or a freshly minted and stored one.
     static func currentKey() -> Data {
         if let key = loadKey() { return key }

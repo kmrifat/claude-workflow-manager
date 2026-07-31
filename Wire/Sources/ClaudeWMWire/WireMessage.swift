@@ -143,6 +143,15 @@ public enum WireCodec {
     /// ISO-8601 to match `.taskboard/tasks.json`, so a date means the same thing
     /// everywhere in this product. `sortedKeys` because a stable byte order
     /// makes frames diffable in a log and tests independent of dictionary order.
+    ///
+    /// **Wire timestamps are second-resolution.** Foundation's `.iso8601`
+    /// strategy emits no fractional part, so a `Date` that goes out at
+    /// `…:37.600` comes back as `…:37`. That is fine for everything here — a
+    /// card's `updatedAt` is shown to a person — but it means a decoded
+    /// snapshot is *not* `==` to the one that was encoded, and anything
+    /// comparing snapshots must use `revision` rather than equality. Adding
+    /// fractional seconds was rejected: it would put a second date spelling
+    /// into a product whose other timestamps a human hand-edits.
     private static let encoder: JSONEncoder = {
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601

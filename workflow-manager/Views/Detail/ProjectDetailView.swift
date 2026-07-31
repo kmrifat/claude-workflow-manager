@@ -21,7 +21,10 @@ struct ProjectDetailView: View {
     @State private var editorTarget: ProjectEditorTarget?
     @State private var showsOverview = false
     @State private var wantsEditAfterOverview = false
-    @State private var sync = WorkflowSyncModel()
+    /// From the app-level coordinator, for the same reason the terminal
+    /// sessions are: this view is recreated on every project switch, and sync
+    /// that stops when you look away is sync that silently does not happen.
+    @Environment(WorkflowSyncCoordinator.self) private var syncCoordinator
     @State private var showsContractSheet = false
     /// From an app-level store, not owned here: this view is recreated on every
     /// project switch, so owning the sessions would kill a running dev server
@@ -81,14 +84,12 @@ struct ProjectDetailView: View {
             .sheet(isPresented: $showsContractSheet) {
                 WorkflowContractSheet(project: project)
             }
-            .environment(sync)
-            // Sync follows the project, and stops the moment it is turned off.
+            .environment(syncCoordinator.model(for: project))
+            // Turning sync on or off, or relinking the repository, changes which
+            // engines should be running. The coordinator otherwise reconciles
+            // itself on every save, with no help from this view.
             .task(id: syncKey) {
-                sync.start(for: project, context: context)
-            }
-            .onDisappear { sync.stop() }
-            .onChange(of: sync.boardRevision(of: project)) { _, _ in
-                sync.scheduleWrite(for: project, context: context)
+                syncCoordinator.reconcile()
             }
             .onReceive(NotificationCenter.default.publisher(for: .newItemRequested)) { _ in
                 addItemToFirstColumn()
