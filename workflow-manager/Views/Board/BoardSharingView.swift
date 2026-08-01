@@ -24,6 +24,8 @@ struct BoardSharingView: View {
     @State private var push = PushRegistry.shared
     @State private var pastedKey = ""
     @State private var showsKeyField = false
+    /// Collapsed unless a key is already set up — see `pushSection`.
+    @State private var showsPushSetup = PushRegistry.shared.isConfigured
     @State private var showKeyRotationConfirmation = false
 
     var body: some View {
@@ -174,24 +176,45 @@ struct BoardSharingView: View {
         }
     }
 
-    /// Where the user supplies their own APNs key. Never bundled: an auth key
-    /// is account-wide, so one shipped inside the app would let any buyer push
-    /// to every other install.
+    /// Folded away, because it asks for something almost nobody has.
+    ///
+    /// Supplying an APNs auth key is developer plumbing, not a product setting:
+    /// a person who buys this app has no key and never will. It is in the UI at
+    /// all because the Mac is its own push provider, and a provider needs a
+    /// credential from somewhere. The alternatives are worse — bundling a key
+    /// hands it to every buyer (and this one is team-scoped, so a leak reaches
+    /// every app on the account), and a relay that would hide it is the backend
+    /// this product does not have.
+    ///
+    /// So: collapsed, honest about who it is for, and out of the way of someone
+    /// who only wants their board on their phone.
     @ViewBuilder
     private var pushSection: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        DisclosureGroup(isExpanded: $showsPushSetup) {
+            pushSetup.padding(.top, 8)
+        } label: {
             HStack {
-                Text("Push to a sleeping phone")
-                    .font(.headline)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Push to a sleeping phone")
+                        .font(.headline)
+                    Text("Advanced — needs an Apple developer push key")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
                 Spacer()
                 if push.isConfigured {
-                    Label("Configured", systemImage: "checkmark.circle.fill")
+                    Label("On", systemImage: "checkmark.circle.fill")
                         .foregroundStyle(.green)
                         .font(.caption)
                 }
             }
+        }
+    }
 
-            Text("Local notifications reach your phone only while Claude WM is open on it — iOS suspends the app seconds after the screen goes off. With an Apple push key, this Mac can notify it while it sleeps. Only phones that aren’t currently connected get a push, so you never see the same move twice.")
+    @ViewBuilder
+    private var pushSetup: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Notifications reach your phone only while Claude WM is open on it — iOS suspends the app seconds after the screen goes off. An Apple push key lets this Mac notify it while it sleeps. Only phones that aren’t currently connected get a push, so you never see the same move twice.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)

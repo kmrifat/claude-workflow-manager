@@ -369,9 +369,17 @@ Three things about it that are easy to get wrong:
   its own local notification, so pushing as well shows the same move twice.
   `PushRegistry` tracks connectedness from the socket, which is why
   `BoardServer` must notice EOF — see below.
-- **The `.p8` is never bundled.** It is account-wide: one shipped inside a copy
-  you sell lets any buyer push to every install. The user pastes their own into
-  `BoardSharingView`, and it lives in the Keychain.
+- **The `.p8` is never bundled**, and the setup for it is folded away in
+  `BoardSharingView` because it is developer plumbing, not a product setting —
+  a person who buys this app has no push key and never will. It is in the UI at
+  all only because a provider needs a credential and there is no server to hold
+  one. Bundling it is not the escape: an auth key is account-wide, so a copy you
+  sell hands every buyer the ability to push to every app on the account.
+
+  **If this ever ships to people other than you, the answer is a small relay** —
+  it accepts a notice, signs with the key it alone holds, and forwards to Apple.
+  That is the one place a backend earns its keep in this product, and the hop
+  need carry nothing but a card title and two column names.
 - **Sandbox and production tokens are indistinguishable.** A development build's
   token is rejected by the production host with `BadDeviceToken`, a 400 that
   reads like a bug in your token handling. `APNsClient` tries one host, retries
