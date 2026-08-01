@@ -52,12 +52,20 @@ final class BoardColumn {
         set { roleRaw = newValue?.rawValue }
     }
 
+    /// The column's cards, in board order.
+    ///
+    /// `isDeleted` is filtered here rather than at each call site. SwiftData
+    /// leaves a deleted object in its relationship arrays until the context
+    /// saves, so between a delete and the next autosave `items` still contains
+    /// the card — and every reader got it wrong in its own way: the board drew
+    /// it, the WIP count included it, the sync wrote it back to `tasks.json`.
+    /// Making the accessor correct means a new reader cannot forget.
     var orderedItems: [WorkItem] {
-        items.sorted { $0.sortOrder < $1.sortOrder }
+        items.lazy.filter { !$0.isDeleted }.sorted { $0.sortOrder < $1.sortOrder }
     }
 
     var isOverWIP: Bool {
         guard let wipLimit else { return false }
-        return items.count > wipLimit
+        return orderedItems.count > wipLimit
     }
 }

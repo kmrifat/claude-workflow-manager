@@ -131,16 +131,29 @@ final class WorkItem {
 
     var isDone: Bool { completedAt != nil }
 
+    /// Live subtasks, in order.
+    ///
+    /// Filters `isDeleted` for the same reason `BoardColumn.orderedItems` does:
+    /// a deleted subtask stays in the relationship until the context saves, and
+    /// until then it is drawn in the checklist and counted in "2 of 5".
     var orderedSubtasks: [Subtask] {
-        subtasks.sorted { $0.sortOrder < $1.sortOrder }
+        subtasks.lazy.filter { !$0.isDeleted }.sorted { $0.sortOrder < $1.sortOrder }
     }
 
-    var completedSubtaskCount: Int { subtasks.count(where: \.isDone) }
+    var subtaskCount: Int { orderedSubtasks.count }
+
+    var completedSubtaskCount: Int { orderedSubtasks.count(where: \.isDone) }
 
     // MARK: - Dependency helpers
 
     /// Blockers that are not yet done — the ones actually holding this up.
-    var openBlockers: [WorkItem] { blockedBy.filter { !$0.isDone } }
+    ///
+    /// A deleted blocker is not a blocker. Without the `isDeleted` filter a card
+    /// stays greyed as **Blocked** with *Send to Claude* disabled, and nothing on
+    /// screen explains why, because the blocking card is no longer on the board.
+    var openBlockers: [WorkItem] {
+        blockedBy.filter { !$0.isDeleted && !$0.isDone }
+    }
 
     var isBlocked: Bool { !openBlockers.isEmpty }
 

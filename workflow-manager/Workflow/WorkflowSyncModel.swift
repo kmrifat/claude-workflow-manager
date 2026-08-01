@@ -118,7 +118,7 @@ final class WorkflowSyncModel {
             // Same reason as `snapshot`: a deleted item lingers here until the
             // context saves, and the revision has to change *now* so the write
             // that records the tombstone is actually scheduled.
-            for item in column.orderedItems where !item.isDeleted {
+            for item in column.orderedItems {
                 hasher.combine(item.uuid)
                 hasher.combine(item.title)
                 hasher.combine(item.details)
@@ -278,7 +278,7 @@ final class WorkflowSyncModel {
         }
 
         let byID = Dictionary(
-            project.allItems.filter { !$0.isDeleted }.map { ($0.uuid.uuidString, $0) },
+            project.allItems.map { ($0.uuid.uuidString, $0) },
             uniquingKeysWith: { first, _ in first }
         )
 
@@ -326,7 +326,7 @@ final class WorkflowSyncModel {
     /// agent reading it back would recreate the card from our own row.
     private func snapshot(of project: Project) -> [WorkflowMerge.LocalTask] {
         project.orderedColumns.flatMap { column in
-            column.orderedItems.filter { !$0.isDeleted }.map { item in
+            column.orderedItems.map { item in
                 WorkflowMerge.LocalTask(
                     id: item.uuid.uuidString,
                     title: item.title,

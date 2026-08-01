@@ -63,7 +63,7 @@ struct TerminalView: View {
     /// Changes to the saved commands, as one comparable value.
     private var commandsRevision: Int {
         var hasher = Hasher()
-        for command in project.orderedTerminalCommands where !command.isDeleted {
+        for command in project.orderedTerminalCommands {
             hasher.combine(command.uuid)
             hasher.combine(command.name)
             hasher.combine(command.command)

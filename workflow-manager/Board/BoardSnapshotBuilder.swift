@@ -34,9 +34,7 @@ enum BoardSnapshotBuilder {
     static func snapshot(of project: Project, now: Date = .now) -> BoardSnapshot {
         BoardSnapshot(
             project: reference(to: project),
-            columns: project.orderedColumns
-                .filter { !$0.isDeleted }
-                .map(column(from:)),
+            columns: project.orderedColumns.map(column(from:)),
             revision: revision(of: project),
             capturedAt: wireDate(now)
         )
@@ -80,14 +78,12 @@ enum BoardSnapshotBuilder {
             role: column.role.map(wireRole(for:)),
             wipLimit: column.wipLimit,
             isCompletionColumn: column.isCompletionColumn,
-            cards: column.orderedItems
-                .filter { !$0.isDeleted }
-                .map(card(from:))
+            cards: column.orderedItems.map(card(from:))
         )
     }
 
     private static func card(from item: WorkItem) -> WireCard {
-        let subtasks = item.subtasks.filter { !$0.isDeleted }
+        let subtasks = item.orderedSubtasks
         return WireCard(
             id: item.uuid.uuidString,
             title: item.title,
@@ -103,6 +99,9 @@ enum BoardSnapshotBuilder {
             branch: item.workflowBranch,
             prURL: item.workflowPRURL,
             requested: item.workflowRequested,
+            // `blockedBy` is the raw relationship, so this one still filters:
+            // the accessor that does it for you is `openBlockers`, and the phone
+            // needs every blocker, done or not.
             blockedBy: item.blockedBy
                 .filter { !$0.isDeleted }
                 .map { $0.uuid.uuidString },
@@ -135,13 +134,13 @@ enum BoardSnapshotBuilder {
     /// sync are separately switchable, so they cannot share that gate.
     static func revision(of project: Project) -> Int {
         var hasher = Hasher()
-        for column in project.orderedColumns where !column.isDeleted {
+        for column in project.orderedColumns {
             hasher.combine(column.uuid)
             hasher.combine(column.name)
             hasher.combine(column.roleRaw)
             hasher.combine(column.wipLimit)
             hasher.combine(column.isCompletionColumn)
-            for item in column.orderedItems where !item.isDeleted {
+            for item in column.orderedItems {
                 hasher.combine(item.uuid)
                 hasher.combine(item.title)
                 hasher.combine(item.details)
@@ -157,7 +156,7 @@ enum BoardSnapshotBuilder {
                 hasher.combine(item.workflowPRURL)
                 // Subtask *counts* are on the card, so their state is visible
                 // to the phone and belongs in the revision.
-                for subtask in item.subtasks where !subtask.isDeleted {
+                for subtask in item.orderedSubtasks {
                     hasher.combine(subtask.uuid)
                     hasher.combine(subtask.isDone)
                 }

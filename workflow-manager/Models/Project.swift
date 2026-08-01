@@ -120,16 +120,20 @@ final class Project {
 
     var hasRepository: Bool { repoPath != nil }
 
+    /// Live columns, in board order. See `BoardColumn.orderedItems` for why
+    /// `isDeleted` is filtered in the accessor rather than at each call site.
     var orderedColumns: [BoardColumn] {
-        columns.sorted { $0.sortOrder < $1.sortOrder }
+        columns.lazy.filter { !$0.isDeleted }.sorted { $0.sortOrder < $1.sortOrder }
     }
 
     var orderedTerminalCommands: [TerminalCommand] {
-        terminalCommands.sorted { $0.sortOrder < $1.sortOrder }
+        terminalCommands.lazy.filter { !$0.isDeleted }.sorted { $0.sortOrder < $1.sortOrder }
     }
 
+    /// Every live card on the board. Goes through the ordered accessors so it
+    /// inherits their `isDeleted` filtering.
     var allItems: [WorkItem] {
-        columns.flatMap(\.items)
+        orderedColumns.flatMap(\.orderedItems)
     }
 
     // MARK: - Claude sync mapping

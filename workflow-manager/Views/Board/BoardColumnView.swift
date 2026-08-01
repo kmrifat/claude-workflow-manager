@@ -346,7 +346,7 @@ struct BoardColumnView: View {
     /// Resolves a card id back to a live, undeleted item in this column.
     private func item(for id: UUID?) -> WorkItem? {
         guard let id else { return nil }
-        return column.items.first { $0.uuid == id && !$0.isDeleted }
+        return column.orderedItems.first { $0.uuid == id }
     }
 
     /// Presents while an id is set, and clears it on dismissal.

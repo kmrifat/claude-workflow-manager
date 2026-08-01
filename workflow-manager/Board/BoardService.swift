@@ -223,9 +223,10 @@ final class BoardService: BoardServerHandler {
 
     // MARK: - Lookup
     //
-    // All three filter `isDeleted`, because a card deleted a moment ago is still
-    // in `column.items` until the context saves — and a mutation applied to one
-    // would succeed, ack, and change nothing anybody can see.
+    // Projects come from a fetch and still need filtering; columns and cards go
+    // through the ordered accessors, which drop deleted objects themselves. That
+    // matters here: a mutation applied to a card deleted a moment ago would
+    // succeed, ack, and change nothing anybody can see.
 
     private func allProjects() -> [Project] {
         let descriptor = FetchDescriptor<Project>(sortBy: [SortDescriptor(\.sortOrder)])
@@ -239,14 +240,12 @@ final class BoardService: BoardServerHandler {
 
     private func column(id: String, in project: Project) -> BoardColumn? {
         guard let uuid = UUID(uuidString: id) else { return nil }
-        return project.orderedColumns.first { !$0.isDeleted && $0.uuid == uuid }
+        return project.orderedColumns.first { $0.uuid == uuid }
     }
 
     private func card(id: String, in project: Project) -> WorkItem? {
         guard let uuid = UUID(uuidString: id) else { return nil }
-        return project.orderedColumns
-            .flatMap(\.orderedItems)
-            .first { !$0.isDeleted && $0.uuid == uuid }
+        return project.allItems.first { $0.uuid == uuid }
     }
 
     private func modelPriority(for priority: WirePriority) -> Priority {
