@@ -176,36 +176,49 @@ struct BoardSharingView: View {
         }
     }
 
-    /// Folded away, because it asks for something almost nobody has.
+    /// Disappears entirely once a relay is configured.
     ///
-    /// Supplying an APNs auth key is developer plumbing, not a product setting:
-    /// a person who buys this app has no key and never will. It is in the UI at
-    /// all because the Mac is its own push provider, and a provider needs a
-    /// credential from somewhere. The alternatives are worse — bundling a key
-    /// hands it to every buyer (and this one is team-scoped, so a leak reaches
-    /// every app on the account), and a relay that would hide it is the backend
-    /// this product does not have.
+    /// The relay holds the key, so there is nothing for anyone to supply and no
+    /// reason to show a field asking for it. What remains is a status line: push
+    /// is a thing that either works or does not, and a user has no lever here.
     ///
-    /// So: collapsed, honest about who it is for, and out of the way of someone
-    /// who only wants their board on their phone.
+    /// The key fields survive only for the no-relay case — someone running this
+    /// from source who owns an APNs key and would rather not deploy a Worker.
+    /// That is a developer, which is why it says so.
     @ViewBuilder
     private var pushSection: some View {
-        DisclosureGroup(isExpanded: $showsPushSetup) {
-            pushSetup.padding(.top, 8)
-        } label: {
-            HStack {
+        if push.usesRelay {
+            HStack(spacing: 8) {
+                Image(systemName: "bell.badge.fill")
+                    .foregroundStyle(.tint)
                 VStack(alignment: .leading, spacing: 2) {
-                    Text("Push to a sleeping phone")
+                    Text("Sleeping phones get notified")
                         .font(.headline)
-                    Text("Advanced — needs an Apple developer push key")
+                    Text("Handled for you. Only phones that aren’t connected get a push, so you never see the same move twice.")
                         .font(.caption)
                         .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
                 }
                 Spacer()
-                if push.isConfigured {
-                    Label("On", systemImage: "checkmark.circle.fill")
-                        .foregroundStyle(.green)
-                        .font(.caption)
+            }
+        } else {
+            DisclosureGroup(isExpanded: $showsPushSetup) {
+                pushSetup.padding(.top, 8)
+            } label: {
+                HStack {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Push to a sleeping phone")
+                            .font(.headline)
+                        Text("Advanced — needs an Apple developer push key")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    if push.isConfigured {
+                        Label("On", systemImage: "checkmark.circle.fill")
+                            .foregroundStyle(.green)
+                            .font(.caption)
+                    }
                 }
             }
         }
