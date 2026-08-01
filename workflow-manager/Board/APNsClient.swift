@@ -72,8 +72,13 @@ actor APNsClient {
     private var cachedToken: (value: String, issued: Date)?
     private static let tokenLifetime: TimeInterval = 45 * 60
 
-    /// Which host this phone's tokens belong to, once we know.
-    private var host: Host?
+    /// Which host each token belongs to, once we know.
+    ///
+    /// Per token, not one for the client: a Mac can serve a phone running a
+    /// Debug build from Xcode *and* one on TestFlight at the same time, and
+    /// those tokens come from different environments. A single cached host
+    /// would learn one and then permanently mis-route the other.
+    private var hostByToken: [String: Host] = [:]
 
     private enum Host: String {
         case production = "api.push.apple.com"
@@ -92,13 +97,13 @@ actor APNsClient {
     func send(_ notice: CardMoveNotice, to deviceToken: String) async throws {
         // A development build is the common case while any of this is being
         // built, so start there and let the fallback correct it.
-        let first = host ?? .sandbox
+        let first = hostByToken[deviceToken] ?? .sandbox
         do {
             try await post(notice, to: deviceToken, host: first)
-            host = first
+            hostByToken[deviceToken] = first
         } catch Failure.rejected(_, let reason) where reason == "BadDeviceToken" {
             try await post(notice, to: deviceToken, host: first.other)
-            host = first.other
+            hostByToken[deviceToken] = first.other
         }
     }
 
