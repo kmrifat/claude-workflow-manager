@@ -32,6 +32,14 @@ xcuserdata/
 *.sqlite-wal
 *.sqlite-shm
 
+# Credentials. An APNs auth key is account-wide — anyone holding it can push to
+# every app under the team — and it belongs in the Keychain, not a repository.
+# Listed defensively: nothing should ever put one here, and if something does,
+# git will not take it.
+*.p8
+*.p12
+*.mobileprovision
+
 # Per-machine Claude Code settings. Kept out of the repo on purpose: the shared
 # instructions live in CLAUDE.md, while settings.local.json is one developer's
 # permission grants. A global ~/.config/git/ignore rule covers this on some
