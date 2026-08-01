@@ -205,6 +205,9 @@ final class BoardConnection {
         switch frame.message {
         case .welcome(let serverName):
             state = .connected(serverName: serverName)
+            // Sets the delegate and asks for permission now that there is a Mac
+            // on the other end — see `PhoneNotifier.prepare()`.
+            PhoneNotifier.shared.prepare()
             send(.listProjects)
             if let selectedProjectID { requestSnapshot(projectID: selectedProjectID) }
 

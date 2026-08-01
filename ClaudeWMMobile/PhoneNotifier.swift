@@ -17,11 +17,14 @@
 //  notification you sometimes get is worse than one you never get, unless the
 //  user knows which is which.
 //
-//  ## Foreground is deliberately silent
+//  ## Foreground banners are opted into, deliberately
 //
-//  No `UNUserNotificationCenterDelegate` returning `.banner`. If the board is on
-//  screen the card visibly moves, and a banner over the top of it says the same
-//  thing twice.
+//  iOS shows nothing while the app is frontmost unless you say otherwise. The
+//  first cut left that alone, reasoning that a visible board makes a banner
+//  redundant — which was wrong twice over. You are usually looking at *one*
+//  column of *one* project, so a card moving elsewhere is not visible at all;
+//  and it made the feature impossible to try, because anyone testing it has the
+//  app open.
 //
 
 import Foundation
@@ -29,7 +32,7 @@ import UserNotifications
 import ClaudeWMWire
 
 @MainActor
-final class PhoneNotifier {
+final class PhoneNotifier: NSObject, UNUserNotificationCenterDelegate {
     static let shared = PhoneNotifier()
 
     private static let enabledKey = "cardMoveNotificationsEnabled"
@@ -42,12 +45,46 @@ final class PhoneNotifier {
     private var authorization: UNAuthorizationStatus?
     private var isRequesting = false
 
-    private init() {}
+    private override init() { super.init() }
 
-    /// Asked for at a moment the user can connect to something — the first move
-    /// they did not make — rather than on first launch, when the question has
-    /// not been earned. The notification that triggers the prompt is dropped,
-    /// because the answer arrives after it.
+    /// Called once the phone is actually talking to a Mac.
+    ///
+    /// Authorization is asked for here rather than at the first move, unlike the
+    /// Mac. The Mac is always running, so losing one notice to the prompt costs
+    /// nothing; the phone may only be awake for a handful of seconds, and losing
+    /// the first one there can mean losing the only one. Pairing just succeeded,
+    /// so the question has context.
+    func prepare() {
+        UNUserNotificationCenter.current().delegate = self
+        guard isEnabled else { return }
+        Task { await requestIfNeeded() }
+    }
+
+    @discardableResult
+    private func requestIfNeeded() async -> Bool {
+        let center = UNUserNotificationCenter.current()
+        if authorization == nil {
+            authorization = await center.notificationSettings().authorizationStatus
+        }
+        if authorization == .notDetermined, !isRequesting {
+            isRequesting = true
+            let granted = (try? await center.requestAuthorization(options: [.alert, .sound])) ?? false
+            authorization = granted ? .authorized : .denied
+            isRequesting = false
+        }
+        return authorization != .denied
+    }
+
+    /// Shows the banner even with the app frontmost. See the note above.
+    nonisolated func userNotificationCenter(
+        _ center: UNUserNotificationCenter,
+        willPresent notification: UNNotification
+    ) async -> UNNotificationPresentationOptions {
+        [.banner, .list]
+    }
+
+    /// Posts a notice, asking for permission first if that has not happened yet
+    /// — normally it has, in `prepare()`, the moment the phone reached a Mac.
     func post(_ notice: CardMoveNotice) {
         guard isEnabled else { return }
         Task { await deliver(notice) }
@@ -56,22 +93,7 @@ final class PhoneNotifier {
     private func deliver(_ notice: CardMoveNotice) async {
         let center = UNUserNotificationCenter.current()
 
-        if authorization == nil {
-            authorization = await center.notificationSettings().authorizationStatus
-        }
-        switch authorization {
-        case .notDetermined:
-            guard !isRequesting else { return }
-            isRequesting = true
-            let granted = (try? await center.requestAuthorization(options: [.alert, .sound])) ?? false
-            authorization = granted ? .authorized : .denied
-            isRequesting = false
-            return
-        case .denied:
-            return
-        default:
-            break
-        }
+        guard await requestIfNeeded() else { return }
 
         let content = UNMutableNotificationContent()
         content.title = notice.title
