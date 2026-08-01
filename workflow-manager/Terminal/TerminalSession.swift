@@ -41,6 +41,16 @@ final class TerminalSession: Identifiable {
     /// The screen. Rebuilt incrementally as bytes arrive.
     private(set) var screen = TerminalEmulator(columns: 100, rows: 30)
 
+    /// Whether the pane should keep itself pinned to the newest output.
+    ///
+    /// Lives on the session, not the view, so it survives switching away and
+    /// back — the session outlives every pane that shows it. Scrolling up to
+    /// read something is a statement that you want to stay there, and a `git
+    /// log` or a chatty dev server should not drag you back down mid-sentence.
+    /// Scrolling to the bottom again opts back in, which is how every terminal
+    /// behaves.
+    var followsTail = true
+
     private var shell: InteractiveShell?
     /// Whether the last close was asked for.
     ///
@@ -218,7 +228,12 @@ final class TerminalSession: Identifiable {
 
 /// A lock-guarded byte queue. The pty reader fills it from a background queue;
 /// the session empties it on the main actor.
-private final class ByteBuffer: @unchecked Sendable {
+/// `nonisolated` deliberately. The target defaults types to `@MainActor`, which
+/// this must not inherit: the pty's read handler calls `append` from a
+/// background thread, which is the whole reason the class carries its own lock
+/// and is `@unchecked Sendable`. Inheriting main-actor isolation made that call
+/// a warning today and an error under the Swift 6 language mode.
+private nonisolated final class ByteBuffer: @unchecked Sendable {
     private let lock = NSLock()
     private var storage = Data()
     /// A runaway process must not exhaust memory before the drain catches up.

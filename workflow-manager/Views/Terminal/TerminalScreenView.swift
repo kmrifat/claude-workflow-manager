@@ -64,10 +64,24 @@ struct TerminalScreenView: View {
                         alignment: .topLeading
                     )
                 }
+                // Follow the newest output only while the pane is already at
+                // the bottom. `contentSize` can be shorter than the container
+                // when there is little output, so the comparison is clamped
+                // rather than being a bare subtraction that goes negative.
+                .onScrollGeometryChange(for: Bool.self) { geometry in
+                    let maxOffset = max(0, geometry.contentSize.height - geometry.containerSize.height)
+                    return geometry.contentOffset.y >= maxOffset - Self.tailSlack
+                } action: { _, isAtBottom in
+                    session.followsTail = isAtBottom
+                }
                 .onChange(of: session.screen.displayRows.count) { _, _ in
+                    guard session.followsTail else { return }
                     proxy.scrollTo(Self.bottomAnchor, anchor: .bottom)
                 }
-                .onAppear { proxy.scrollTo(Self.bottomAnchor, anchor: .bottom) }
+                .onAppear {
+                    guard session.followsTail else { return }
+                    proxy.scrollTo(Self.bottomAnchor, anchor: .bottom)
+                }
             }
             .task(id: TerminalSize(columns: columns, rows: rows)) {
                 session.resize(columns: columns, rows: rows)
@@ -94,6 +108,11 @@ struct TerminalScreenView: View {
     }
 
     private static let bottomAnchor = "terminal-bottom"
+
+    /// How close to the bottom still counts as "at the bottom". A couple of
+    /// lines of tolerance, because a pane that only follows on an exact pixel
+    /// match stops following the first time a partial row is showing.
+    private static let tailSlack: CGFloat = 24
 
     /// Terminals are conventionally dark, and the cell colours below assume it.
     private static let background = Color(red: 0.11, green: 0.11, blue: 0.12)
