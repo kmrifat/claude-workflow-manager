@@ -48,10 +48,20 @@ struct FilesView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(.background.secondary)
         .task(id: root) {
-            // The root always appears, so this reliably seeds the top level.
-            session.tree.loadIfNeeded(root)
+            // The root always appears, so this reliably seeds the top level and
+            // starts the watches. Switching project tears the old ones down.
+            session.tree.begin(root: root)
         }
-        .task(id: TaskKey(url: session.selection, token: reloadToken)) {
+        .task(id: TaskKey(
+            url: session.selection,
+            token: reloadToken,
+            // Re-reads the preview when the selected file's own folder changes
+            // on disk — the whole point of the watcher, from the pane the user
+            // is actually looking at.
+            directoryRevision: session.selection.map {
+                session.tree.revision(of: $0.deletingLastPathComponent())
+            } ?? 0
+        )) {
             await loadSelection()
         }
     }
@@ -61,6 +71,7 @@ struct FilesView: View {
     private struct TaskKey: Equatable {
         let url: URL?
         let token: Int
+        let directoryRevision: Int
     }
 
     // MARK: - Tree
@@ -323,6 +334,54 @@ final class FileTreeModel {
     private var expanded: Set<URL> = []
     private var loading: Set<URL> = []
 
+    /// Bumped each time a directory is re-read because something on disk moved.
+    /// The preview watches its own file's folder through this, so editing a file
+    /// in another app updates the pane you are looking at.
+    private(set) var revisions: [URL: Int] = [:]
+
+    private var root: URL?
+    private let watcher = DirectoryWatcher()
+    private var watchTask: Task<Void, Never>?
+
+    func revision(of directory: URL) -> Int { revisions[directory] ?? 0 }
+
+    /// Starts watching for `root` and its open folders. Called by the view's
+    /// `.task(id: root)`, so switching project tears the old watches down.
+    func begin(root: URL) {
+        guard self.root != root else { return }
+        self.root = root
+        childrenByURL.removeAll()
+        expanded.removeAll()
+        revisions.removeAll()
+        watchTask?.cancel()
+        watchTask = Task { [weak self] in
+            guard let self else { return }
+            for await directory in watcher.changes {
+                // Only folders still on screen. A collapsed folder is unwatched,
+                // but an event already in flight can outlive the collapse.
+                guard childrenByURL[directory] != nil else { continue }
+                revisions[directory, default: 0] += 1
+                load(directory, force: true)
+            }
+        }
+        loadIfNeeded(root)
+        syncWatches()
+    }
+
+    func end() {
+        watchTask?.cancel()
+        watchTask = nil
+        watcher.stop()
+    }
+
+    /// The root plus every open folder — never the whole tree. Walking it to
+    /// watch it would defeat the reason listing is lazy in the first place.
+    private func syncWatches() {
+        var wanted = expanded
+        if let root { wanted.insert(root) }
+        watcher.setWatched(wanted)
+    }
+
     func children(of directory: URL) -> [FileTree.Node] {
         childrenByURL[directory] ?? []
     }
@@ -336,6 +395,7 @@ final class FileTreeModel {
         } else {
             expanded.remove(directory)
         }
+        syncWatches()
     }
 
     /// Reads `directory` unless it is already loaded. The initial root read and
@@ -353,8 +413,11 @@ final class FileTreeModel {
         for directory in childrenByURL.keys { load(directory) }
     }
 
-    private func load(_ directory: URL) {
+    private func load(_ directory: URL, force: Bool = false) {
+        // A forced reload still waits for an in-flight read rather than racing
+        // it; the watcher will fire again if the folder changes meanwhile.
         guard !loading.contains(directory) else { return }
+        _ = force
         loading.insert(directory)
         let hidden = showHidden
         Task {
