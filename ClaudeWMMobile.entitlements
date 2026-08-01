@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!--
+	  `development` matches a build signed with a development profile, which is
+	  what Xcode produces for a device run. It decides which APNs host issues the
+	  token, and a token from one host is rejected by the other with
+	  `BadDeviceToken` — a 400 that reads like a bug in your token handling.
+	  `APNsClient` tries one host and falls back on exactly that error, so this
+	  value being wrong costs a retry rather than silence. Set it to `production`
+	  when you ship.
+	-->
+	<key>aps-environment</key>
+	<string>development</string>
+</dict>
+</plist>

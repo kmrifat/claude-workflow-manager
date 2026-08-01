@@ -21,6 +21,9 @@ struct BoardSharingView: View {
     @AppStorage("boardNotificationsEnabled") private var notifyOnMoves = true
 
     @State private var pairingURL: URL?
+    @State private var push = PushRegistry.shared
+    @State private var pastedKey = ""
+    @State private var showsKeyField = false
     @State private var showKeyRotationConfirmation = false
 
     var body: some View {
@@ -39,6 +42,8 @@ struct BoardSharingView: View {
                     }
                     Divider()
                     notificationsSection
+                    Divider()
+                    pushSection
                 }
                 .padding(20)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -166,6 +171,82 @@ struct BoardSharingView: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    /// Where the user supplies their own APNs key. Never bundled: an auth key
+    /// is account-wide, so one shipped inside the app would let any buyer push
+    /// to every other install.
+    @ViewBuilder
+    private var pushSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("Push to a sleeping phone")
+                    .font(.headline)
+                Spacer()
+                if push.isConfigured {
+                    Label("Configured", systemImage: "checkmark.circle.fill")
+                        .foregroundStyle(.green)
+                        .font(.caption)
+                }
+            }
+
+            Text("Local notifications reach your phone only while Claude WM is open on it — iOS suspends the app seconds after the screen goes off. With an Apple push key, this Mac can notify it while it sleeps. Only phones that aren’t currently connected get a push, so you never see the same move twice.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+
+            HStack(spacing: 8) {
+                TextField("Key ID", text: Binding(
+                    get: { push.keyID }, set: { push.keyID = $0 }
+                ))
+                TextField("Team ID", text: Binding(
+                    get: { push.teamID }, set: { push.teamID = $0 }
+                ))
+            }
+            .textFieldStyle(.roundedBorder)
+
+            if push.hasKey {
+                HStack {
+                    Text("Auth key stored in your Keychain.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    Spacer()
+                    Button("Remove") { push.forgetKey() }
+                        .buttonStyle(.link)
+                }
+            } else if showsKeyField {
+                TextEditor(text: $pastedKey)
+                    .font(.system(.caption, design: .monospaced))
+                    .frame(height: 90)
+                    .overlay(RoundedRectangle(cornerRadius: 5).stroke(.separator))
+                HStack {
+                    Spacer()
+                    Button("Save Key") {
+                        push.storeKey(pastedKey)
+                        pastedKey = ""
+                        showsKeyField = false
+                    }
+                    .disabled(!pastedKey.contains("PRIVATE KEY"))
+                }
+            } else {
+                Button("Paste Auth Key (.p8)…") { showsKeyField = true }
+            }
+
+            if push.registeredDeviceCount > 0 {
+                Text("^[\(push.registeredDeviceCount) phone](inflect: true) registered for push.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            if let error = push.lastError {
+                // Apple's rejection reason verbatim: "InvalidProviderToken" or
+                // "BadDeviceToken" is the only actionable part, and paraphrasing
+                // it just makes it un-searchable.
+                Label(error, systemImage: "exclamationmark.triangle.fill")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
         }
     }
 

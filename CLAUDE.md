@@ -356,11 +356,30 @@ stays quiet. The phone cannot know who moved a card — the wire carries a board
 not an audit log — so it diffs column membership between snapshots and ignores
 the cards it just moved itself.
 
-APNs is deliberately absent, and the phone pays for it: iOS suspends the app and
-tears down the socket seconds after it leaves the screen, so notifications arrive
-only while it is open or recently used. No background mode keeps a WebSocket
-alive. The iOS menu says so in as many words — a notification you *sometimes* get
-is worse than one you never get, unless the user knows which is which.
+**The Mac is its own APNs provider.** A local notification cannot reach a phone
+iOS has suspended, and it suspends this one seconds after the screen goes off —
+no background mode keeps a WebSocket alive. So `APNsClient` signs an ES256 JWT
+with CryptoKit and POSTs to Apple over HTTP/2 through `URLSession`; a provider is
+nothing more than that, and renting a server to relay a message between a Mac and
+a phone in the same house would be the product's only shared backend.
+
+Three things about it that are easy to get wrong:
+
+- **A push goes only to phones that are *not* connected.** A connected one posts
+  its own local notification, so pushing as well shows the same move twice.
+  `PushRegistry` tracks connectedness from the socket, which is why
+  `BoardServer` must notice EOF — see below.
+- **The `.p8` is never bundled.** It is account-wide: one shipped inside a copy
+  you sell lets any buyer push to every install. The user pastes their own into
+  `BoardSharingView`, and it lives in the Keychain.
+- **Sandbox and production tokens are indistinguishable.** A development build's
+  token is rejected by the production host with `BadDeviceToken`, a 400 that
+  reads like a bug in your token handling. `APNsClient` tries one host, retries
+  the other on exactly that error, and remembers.
+
+The device token is registered *after* `hello`, so it is covered by the pairing
+key. Accepting one earlier would let an unpaired peer aim someone's Mac at a
+device of its choosing; a test asserts the refusal.
 
 The rule itself lives in `BoardSnapshot.moves(since:ignoring:origin:)`, pure and
 in `ClaudeWMWire`, so it is testable without a notification centre — which

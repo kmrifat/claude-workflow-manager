@@ -208,6 +208,7 @@ final class BoardConnection {
             // Sets the delegate and asks for permission now that there is a Mac
             // on the other end — see `PhoneNotifier.prepare()`.
             PhoneNotifier.shared.prepare()
+            sendPushTokenIfAvailable()
             send(.listProjects)
             if let selectedProjectID { requestSnapshot(projectID: selectedProjectID) }
 
@@ -267,6 +268,17 @@ final class BoardConnection {
     }
 
     // MARK: - Writing
+
+    /// Hands the Mac this phone's APNs token, so it can be reached while
+    /// asleep. Sent after `hello` on purpose: the Mac must not accept a push
+    /// target from a peer that has not proved the pairing key.
+    ///
+    /// The token often is not ready at connect time — Apple answers
+    /// asynchronously — so this is also called when it arrives.
+    func sendPushTokenIfAvailable() {
+        guard state.isConnected, let token = PushRegistration.shared.token else { return }
+        send(.registerPush(deviceID: PushRegistration.shared.deviceID, token: token))
+    }
 
     func select(projectID: String) {
         selectedProjectID = projectID

@@ -54,6 +54,10 @@ final class BoardNotifier {
     func post(_ notice: CardMoveNotice) {
         guard isEnabled else { return }
         Task { await deliver(notice) }
+        // And to any paired phone that is asleep. `PushRegistry` skips the ones
+        // holding a socket, because those notify themselves and would otherwise
+        // show the same move twice.
+        PushRegistry.shared.push(notice)
     }
 
     private func deliver(_ notice: CardMoveNotice) async {

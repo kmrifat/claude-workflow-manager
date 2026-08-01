@@ -14,6 +14,10 @@ struct ClaudeWMMobileApp: App {
     @State private var browser = BoardBrowser()
     @State private var paired = PairedMacStore.load()
 
+    /// Only here for the two remote-notification callbacks SwiftUI does not
+    /// surface. See `PushAppDelegate`.
+    @UIApplicationDelegateAdaptor(PushAppDelegate.self) private var appDelegate
+
     @Environment(\.scenePhase) private var scenePhase
 
     var body: some Scene {
@@ -27,6 +31,8 @@ struct ClaudeWMMobileApp: App {
                         // backoff the user cannot see reads as a broken app.
                         browser.start()
                         connection.reconnectNow()
+                        // Cheap, and the token can change under you at any time.
+                        PushRegistration.shared.register()
                     case .background:
                         browser.stop()
                     default:

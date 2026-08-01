@@ -30,6 +30,11 @@ struct BoardScreen: View {
                 .safeAreaInset(edge: .top, spacing: 0) { statusBar }
         }
         .task(id: paired?.service) { connect() }
+        .onChange(of: PushRegistration.shared.token) { _, _ in
+            // Apple answers asynchronously, usually after the socket is already
+            // up, so the token is sent when it arrives rather than at connect.
+            connection.sendPushTokenIfAvailable()
+        }
         .onChange(of: browser.found.map(\.name)) { _, _ in
             // The Mac appeared on the network — possibly for the first time,
             // possibly after waking. Either way it is now reachable.

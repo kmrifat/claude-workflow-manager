@@ -38,6 +38,10 @@ final class BoardService: BoardServerHandler {
     /// not have to know how that works.
     var didMutate: ((Project) -> Void)?
 
+    /// Which phone is on which connection, so a disconnect can mark that device
+    /// reachable-by-push again.
+    private var deviceIDByClient: [UUID: String] = [:]
+
     init(context: ModelContext, expectedToken: @escaping () -> Data? = { BoardPairing.loadKey() }) {
         self.context = context
         self.expectedToken = expectedToken
@@ -84,6 +88,16 @@ final class BoardService: BoardServerHandler {
         case .mutate(let request):
             handleMutation(request, client: client, server: server)
 
+        case .registerPush(let deviceID, let token):
+            // Arrives after `hello`, so the pairing key has already been proved
+            // — a token from an unpaired peer would let anyone aim this Mac's
+            // pushes at a device of their choosing.
+            deviceIDByClient[client] = deviceID
+            PushRegistry.shared.register(deviceID: deviceID, token: token)
+            // Connected devices get their own local notifications, so they are
+            // excluded from pushes until this socket drops.
+            PushRegistry.shared.markConnected(deviceID)
+
         case .unrecognized(let type):
             server.send(.failure(WireFailure(
                 code: .unsupportedMutation,
@@ -110,6 +124,14 @@ final class BoardService: BoardServerHandler {
         }
         server.markReady(client, name: name)
         server.send(.welcome(serverName: BoardServer.defaultServiceName), to: client)
+    }
+
+    /// Called by the transport when a connection goes away, so the device
+    /// becomes push-eligible again. Without this, a phone that connected once
+    /// would never be pushed to — which is precisely the case APNs is for.
+    func clientDisconnected(_ client: UUID) {
+        guard let deviceID = deviceIDByClient.removeValue(forKey: client) else { return }
+        PushRegistry.shared.markDisconnected(deviceID)
     }
 
     // MARK: - Mutations

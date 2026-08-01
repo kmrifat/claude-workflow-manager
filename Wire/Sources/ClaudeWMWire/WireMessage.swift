@@ -26,6 +26,16 @@ public enum ClientMessage: Sendable, Equatable {
     /// of resending a board the phone already has.
     case requestSnapshot(projectID: String, haveRevision: Int?)
     case mutate(MutationRequest)
+    /// The phone's APNs device token, so the Mac can reach it while it is
+    /// asleep. `deviceID` is stable across launches and reinstalls where the
+    /// token is not — it is what lets the Mac recognise "this phone" and stop
+    /// pushing to a token that has been replaced.
+    ///
+    /// Adding a message type does not bump `WireProtocol.version`: an older Mac
+    /// decodes this as `unrecognized` and answers with a refusal, which is
+    /// exactly the tolerance that exists for it. A version bump is for changes
+    /// an old peer would *misread*, not ones it can decline.
+    case registerPush(deviceID: String, token: String)
     case unrecognized(type: String)
 
     public var type: String {
@@ -34,6 +44,7 @@ public enum ClientMessage: Sendable, Equatable {
         case .listProjects:     "listProjects"
         case .requestSnapshot:  "requestSnapshot"
         case .mutate:           "mutate"
+        case .registerPush:     "registerPush"
         case .unrecognized(let type): type
         }
     }
@@ -171,6 +182,7 @@ public enum WireCodec {
 private enum MessageKeys: String, CodingKey {
     case type, token, clientName, serverName, projectID, haveRevision
     case request, projects, snapshot, revision, requestID, failure
+    case deviceID
 }
 
 extension ClientMessage: Codable {
@@ -188,6 +200,9 @@ extension ClientMessage: Codable {
             try container.encodeIfPresent(haveRevision, forKey: .haveRevision)
         case .mutate(let request):
             try container.encode(request, forKey: .request)
+        case .registerPush(let deviceID, let token):
+            try container.encode(deviceID, forKey: .deviceID)
+            try container.encode(token, forKey: .token)
         }
     }
 
@@ -215,6 +230,12 @@ extension ClientMessage: Codable {
         case "mutate":
             guard let request = try? container.decode(MutationRequest.self, forKey: .request) else { break }
             self = .mutate(request)
+            return
+        case "registerPush":
+            guard let deviceID = try? container.decode(String.self, forKey: .deviceID),
+                  let token = try? container.decode(String.self, forKey: .token)
+            else { break }
+            self = .registerPush(deviceID: deviceID, token: token)
             return
         default:
             break

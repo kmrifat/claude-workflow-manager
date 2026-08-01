@@ -194,3 +194,19 @@ private extension JSONDecoder {
         return decoder
     }
 }
+
+// MARK: - Push registration
+
+@Test func pushRegistrationRoundTrips() throws {
+    let frame = ClientFrame(message: .registerPush(deviceID: "vendor-1", token: "abc123"))
+    #expect(try WireCodec.decodeClientFrame(WireCodec.encode(frame)) == frame)
+}
+
+@Test func anOlderMacDeclinesPushRegistrationRatherThanMisreadingIt() throws {
+    // The reason adding a message type does not bump the protocol version: a
+    // peer that has never heard of it produces a refusal, not a wrong action.
+    let json = Data(#"{"version":1,"message":{"type":"registerPush","deviceID":"d","token":"t"}}"#.utf8)
+    let frame = try WireCodec.decodeClientFrame(json)
+    #expect(frame.isFromNewerPeer == false)
+    #expect(frame.message == .registerPush(deviceID: "d", token: "t"))
+}

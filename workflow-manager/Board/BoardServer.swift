@@ -173,6 +173,7 @@ final class BoardServer {
         connections[id]?.cancel()
         connections[id] = nil
         clients.removeAll { $0.id == id }
+        handler?.clientDisconnected(id)
     }
 
     func disconnect(_ id: UUID) { drop(id) }
@@ -197,9 +198,23 @@ final class BoardServer {
     // receives ahead of handling.
 
     private nonisolated func receive(on connection: NWConnection, id: UUID) {
-        connection.receiveMessage { [weak self] data, context, _, error in
+        connection.receiveMessage { [weak self] data, context, isComplete, error in
             guard let self else { return }
             if error != nil {
+                Task { @MainActor in self.drop(id) }
+                return
+            }
+            // End of stream: the phone closed, was killed, or walked out of
+            // Wi-Fi range. It is neither an error nor a close frame, and a peer
+            // going away does *not* move this connection to `.cancelled` —
+            // that state is only for a local cancel. Ignoring it leaves the
+            // client listed as connected forever, which showed up as a phone
+            // that never received a push because the Mac still thought it was
+            // holding a socket.
+            //
+            // The mirror image of the same hole on the client side, found the
+            // same way: by something downstream quietly not happening.
+            if data == nil, error == nil, isComplete {
                 Task { @MainActor in self.drop(id) }
                 return
             }
@@ -332,4 +347,7 @@ final class BoardServer {
 @MainActor
 protocol BoardServerHandler: AnyObject {
     func handle(_ message: ClientMessage, from client: UUID, on server: BoardServer)
+    /// The connection is gone. Separate from `handle` because it is not a
+    /// message — nothing was received, the socket simply ended.
+    func clientDisconnected(_ client: UUID)
 }
