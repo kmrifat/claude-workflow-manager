@@ -53,6 +53,14 @@ final class PushRegistry {
     private var connected: Set<String> = []
 
     private var client: APNsClient?
+    private var relay: PushRelayClient?
+
+    /// A relay is preferred whenever one is configured. It is the shipping path:
+    /// the key lives there instead of on this Mac, so a copy of the app carries
+    /// nothing worth extracting. The direct `APNsClient` remains for whoever
+    /// owns the key and would rather not run anything.
+    var relayConfiguration: PushRelayClient.Configuration? { .current() }
+    var usesRelay: Bool { relayConfiguration != nil }
 
     private init() {}
 
@@ -70,7 +78,9 @@ final class PushRegistry {
 
     var hasKey: Bool { privateKey != nil }
 
-    var isConfigured: Bool { hasKey && !keyID.isEmpty && !teamID.isEmpty }
+    /// Either route will do. A relay needs nothing from the user at all, which
+    /// is the point of it.
+    var isConfigured: Bool { usesRelay || (hasKey && !keyID.isEmpty && !teamID.isEmpty) }
 
     /// Registered phones, whether or not they are connected.
     var registeredDeviceCount: Int { tokens.count }
@@ -142,6 +152,22 @@ final class PushRegistry {
         let targets = tokens.filter { !connected.contains($0.key) }
         guard !targets.isEmpty else { return }
 
+        if let relay = makeRelay() {
+            for (deviceID, token) in targets {
+                Task { [weak self] in
+                    do {
+                        try await relay.send(notice, to: token)
+                    } catch PushRelayClient.Failure.rejected(_, let reason)
+                        where reason == "Unregistered" || reason == "BadDeviceToken" {
+                        await self?.drop(deviceID: deviceID, reason: reason)
+                    } catch {
+                        await self?.report(error.localizedDescription)
+                    }
+                }
+            }
+            return
+        }
+
         guard let client = makeClient() else { return }
         for (deviceID, token) in targets {
             Task { [weak self] in
@@ -168,6 +194,14 @@ final class PushRegistry {
     }
 
     private func report(_ message: String) { lastError = message }
+
+    private func makeRelay() -> PushRelayClient? {
+        guard let configuration = relayConfiguration else { return nil }
+        if let relay { return relay }
+        let made = PushRelayClient(configuration: configuration)
+        relay = made
+        return made
+    }
 
     private func makeClient() -> APNsClient? {
         if let client { return client }

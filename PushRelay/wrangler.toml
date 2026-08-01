@@ -1,0 +1,12 @@
+name = "claude-wm-push"
+main = "src/index.ts"
+compatibility_date = "2026-01-01"
+
+# Everything sensitive is a secret, set with `wrangler secret put NAME`, never
+# here — this file is in the repository.
+#   APNS_KEY_P8   the whole .p8, BEGIN/END lines included
+#   APNS_KEY_ID   the 10 characters from the filename
+#   APNS_TEAM_ID  your Apple team id
+#   RELAY_KEY     a long random string the apps present
+[vars]
+APNS_TOPIC = "com.binarycastle.claude-wm-mobile"
