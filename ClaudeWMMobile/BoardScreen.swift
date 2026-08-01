@@ -17,6 +17,7 @@ struct BoardScreen: View {
     let browser: BoardBrowser
     @Binding var paired: PairedMac?
 
+    @AppStorage("cardMoveNotificationsEnabled") private var notifyOnMoves = true
     @State private var columnIndex = 0
     @State private var editingCard: WireCard?
 
@@ -131,6 +132,16 @@ struct BoardScreen: View {
             Menu {
                 if let snapshot = connection.snapshot {
                     Button("Refresh") { connection.requestSnapshot(projectID: snapshot.project.id) }
+                }
+                Divider()
+                Section {
+                    Toggle("Notify About Card Moves", isOn: $notifyOnMoves)
+                    if notifyOnMoves {
+                        // iOS suspends the app and drops the socket shortly
+                        // after it leaves the screen, so this is a real limit
+                        // rather than a caveat — better said than discovered.
+                        Text("Only while Claude WM is open or recently used.")
+                    }
                 }
                 Divider()
                 Button("Forget This Mac", role: .destructive) {

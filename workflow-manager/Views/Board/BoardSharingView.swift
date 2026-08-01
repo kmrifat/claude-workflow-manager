@@ -17,6 +17,9 @@ struct BoardSharingView: View {
     @Environment(\.dismiss) private var dismiss
     let server: BoardServer
 
+    /// Same key `BoardNotifier` reads, so the two cannot drift.
+    @AppStorage("boardNotificationsEnabled") private var notifyOnMoves = true
+
     @State private var pairingURL: URL?
     @State private var showKeyRotationConfirmation = false
 
@@ -34,6 +37,8 @@ struct BoardSharingView: View {
                     } else {
                         explanation
                     }
+                    Divider()
+                    notificationsSection
                 }
                 .padding(20)
                 .frame(maxWidth: .infinity, alignment: .leading)
@@ -147,6 +152,20 @@ struct BoardSharingView: View {
                     }
                 }
             }
+        }
+    }
+
+    private var notificationsSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Notifications")
+                .font(.headline)
+            Toggle("Tell me when a card moves", isOn: $notifyOnMoves)
+            // Says what it will *not* do, because that is the part people
+            // otherwise discover by being annoyed.
+            Text("Only for moves you didn’t make — Claude picking work up, or your phone. Your own drags stay quiet.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
         }
     }
 

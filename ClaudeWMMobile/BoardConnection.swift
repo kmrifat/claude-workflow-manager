@@ -55,6 +55,10 @@ final class BoardConnection {
 
     /// Mutations sent and not yet acked, by request id.
     private var inFlight: [String: BoardMutation] = [:]
+
+    /// Cards this phone moved. Used once, when the next snapshot arrives, to
+    /// stay quiet about a move the user just made with their own thumb.
+    private var ownMoves: Set<String> = []
     private var reconnectAttempt = 0
     private var reconnectTask: Task<Void, Never>?
 
@@ -212,12 +216,16 @@ final class BoardConnection {
                 select(projectID: projects[0].id)
             }
 
-        case .snapshot(let snapshot):
-            guard snapshot.project.id == selectedProjectID else { return }
-            self.snapshot = snapshot
+        case .snapshot(let incoming):
+            guard incoming.project.id == selectedProjectID else { return }
+            let previous = snapshot
+            self.snapshot = incoming
             // Anything still in flight is now either reflected here or lost;
             // either way the server's board is the truth.
             inFlight.removeAll()
+            let mine = ownMoves
+            ownMoves.removeAll()
+            if let previous { announceMoves(from: previous, to: incoming, ignoring: mine) }
 
         case .event(let projectID, let revision):
             guard projectID == selectedProjectID else { return }
@@ -294,8 +302,27 @@ final class BoardConnection {
         guard let projectID = selectedProjectID else { return }
         let requestID = UUID().uuidString
         inFlight[requestID] = mutation
+        if case .moveCard(let cardID, _, _) = mutation { ownMoves.insert(cardID) }
         applyLocally(mutation)
         send(.mutate(MutationRequest(id: requestID, projectID: projectID, mutation: mutation)))
+    }
+
+    /// Announces moves the phone did not make itself.
+    ///
+    /// The phone cannot know *who* moved a card — the wire carries a board, not
+    /// an audit log — only that one moved and that it was not us. The rule
+    /// itself lives in `BoardSnapshot.moves(since:ignoring:origin:)` so it can
+    /// be tested away from a notification centre.
+    private func announceMoves(
+        from previous: BoardSnapshot,
+        to current: BoardSnapshot,
+        ignoring mine: Set<String>
+    ) {
+        // The Mac is the only peer this phone talks to, so a move it did not
+        // make arrived from over there, whoever originally caused it.
+        for notice in current.moves(since: previous, ignoring: mine, origin: .mac) {
+            PhoneNotifier.shared.post(notice)
+        }
     }
 
     /// The phone's guess at what the Mac will do. Only the cases a finger can

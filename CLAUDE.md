@@ -347,6 +347,25 @@ someone's network is not something to do quietly.
 - `createCard` has no optimistic form. The Mac mints ids, and guessing one
   produces a card that vanishes and reappears with a different identity.
 
+**Notifications are local only, and the phone's are conditional.** A card moving
+between columns posts a `UNUserNotificationCenter` notice — but only for moves
+the device can attribute to somebody else. On the Mac that is exact: the notice
+is posted from `WorkflowSyncModel.apply` (an agent's status change) and
+`BoardService.apply` (a phone's move), never from the board UI, so your own drag
+stays quiet. The phone cannot know who moved a card — the wire carries a board,
+not an audit log — so it diffs column membership between snapshots and ignores
+the cards it just moved itself.
+
+APNs is deliberately absent, and the phone pays for it: iOS suspends the app and
+tears down the socket seconds after it leaves the screen, so notifications arrive
+only while it is open or recently used. No background mode keeps a WebSocket
+alive. The iOS menu says so in as many words — a notification you *sometimes* get
+is worse than one you never get, unless the user knows which is which.
+
+The rule itself lives in `BoardSnapshot.moves(since:ignoring:origin:)`, pure and
+in `ClaudeWMWire`, so it is testable without a notification centre — which
+cannot be constructed outside an app bundle at all.
+
 Board sync is owned by `WorkflowSyncCoordinator` at app level, not by
 `ProjectDetailView`. It used to be the view: `.task(id:)` started sync,
 `.onDisappear` stopped it, `.onChange` wrote the file — so a project you were not

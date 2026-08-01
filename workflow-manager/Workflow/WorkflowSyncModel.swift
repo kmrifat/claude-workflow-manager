@@ -17,6 +17,7 @@
 import Foundation
 import Observation
 import SwiftData
+import ClaudeWMWire
 
 @MainActor
 @Observable
@@ -289,9 +290,21 @@ final class WorkflowSyncModel {
             if let status = change.status,
                let column = project.column(for: ColumnRole(status: status)),
                item.column?.uuid != column.uuid {
+                // Read before the move: afterwards there is no record of where
+                // it came from, and "Review → Done" is most of what the
+                // notification is worth.
+                let from = item.column?.name
                 BoardMutations.append(item, to: column)
                 // The agent picked it up; the request is satisfied.
                 if status != .todo { item.workflowRequested = false }
+
+                BoardNotifier.shared.post(CardMoveNotice(
+                    cardTitle: item.title,
+                    fromColumn: from,
+                    toColumn: column.name,
+                    projectName: project.name,
+                    origin: .claude
+                ))
             }
         }
 

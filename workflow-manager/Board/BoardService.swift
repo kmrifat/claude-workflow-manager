@@ -171,7 +171,20 @@ final class BoardService: BoardServerHandler {
             // `Int.max` is the wire's spelling for "the end" — clamped by
             // `move`, but pinned here so the intent is not accidental.
             let target = index == Int.max ? column.orderedItems.count : index
+            let from = item.column
             BoardMutations.move(item, to: column, insertingAt: target)
+
+            // Only a move between columns is worth telling anyone about;
+            // reordering within one is not news.
+            if from?.uuid != column.uuid {
+                BoardNotifier.shared.post(CardMoveNotice(
+                    cardTitle: item.title,
+                    fromColumn: from?.name,
+                    toColumn: column.name,
+                    projectName: project.name,
+                    origin: .phone
+                ))
+            }
             return .applied
 
         case .setTitle(let cardID, let title):
