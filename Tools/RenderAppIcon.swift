@@ -45,15 +45,18 @@ func drawMark(_ ctx: CGContext, box: CGRect) {
     let k = box.width / 1024
     ctx.scaleBy(x: k, y: k)
 
-    let columnWidth: CGFloat = 168
-    let gap: CGFloat = 76
-    let xs: [CGFloat] = [184, 184 + columnWidth + gap, 184 + 2 * (columnWidth + gap)]
+    // Sized so the mark fills roughly 69% of the box across and 56% down.
+    // The first cut used 64/47 and read timid — a mark that small leaves the
+    // plate looking like a frame around nothing.
+    let columnWidth: CGFloat = 190
+    let gap: CGFloat = 68
+    let xs: [CGFloat] = [159, 159 + columnWidth + gap, 159 + 2 * (columnWidth + gap)]
 
-    let headerY: CGFloat = 270
-    let headerH: CGFloat = 26
-    let cardH: CGFloat = 118
+    let headerY: CGFloat = 223
+    let headerH: CGFloat = 28
+    let cardH: CGFloat = 150
     let cardGap: CGFloat = 30
-    let firstCardY: CGFloat = 340
+    let firstCardY: CGFloat = 291
     let counts = [3, 2, 1]
 
     // Column headers — these are what stop the mark reading as a bar chart.
@@ -71,7 +74,7 @@ func drawMark(_ ctx: CGContext, box: CGRect) {
             let isClaimed = (column == 2)
             // The claimed card sits a little proud of the others. Invisible at
             // 16pt, but it gives the large sizes somewhere for the eye to land.
-            let lift: CGFloat = isClaimed ? 14 : 0
+            let lift: CGFloat = isClaimed ? 18 : 0
             let y = firstCardY + CGFloat(row) * (cardH + cardGap) - lift
             let rect = CGRect(x: x, y: y, width: columnWidth, height: cardH)
 
@@ -81,7 +84,7 @@ func drawMark(_ ctx: CGContext, box: CGRect) {
                               color: rgb(0x000000, 0.42))
             }
             ctx.setFillColor(isClaimed ? amber : cardLight)
-            ctx.addPath(roundedPath(rect, 26))
+            ctx.addPath(roundedPath(rect, 30))
             ctx.fillPath()
             if isClaimed { ctx.restoreGState() }
         }
@@ -164,7 +167,7 @@ func render(size: Int, style: Style) -> CGImage {
     )
 
     // The mark is inset within the plate so it never crowds the corners.
-    let markInset = plate.width * 0.085
+    let markInset = plate.width * 0.06
     drawMark(ctx, box: plate.insetBy(dx: markInset, dy: markInset))
     ctx.restoreGState()
 

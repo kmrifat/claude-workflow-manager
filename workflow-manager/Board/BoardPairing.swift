@@ -31,7 +31,12 @@ import CoreImage
 import CoreImage.CIFilterBuiltins
 import ClaudeWMWire
 
-enum BoardPairing {
+/// `nonisolated`, like `GitHubCLI` and `ClaudeLauncher`: static functions over
+/// the Keychain and CoreImage with no shared mutable state. The target defaults
+/// types to `@MainActor`, and inheriting that here made
+/// `BoardService.init`'s default argument — a nonisolated closure calling
+/// `loadKey()` — a concurrency warning.
+nonisolated enum BoardPairing {
     /// Bonjour type. `_claudewm._tcp` rather than something generic so a phone
     /// browsing the network sees only Macs running this app.
     static let bonjourType = "_claudewm._tcp"

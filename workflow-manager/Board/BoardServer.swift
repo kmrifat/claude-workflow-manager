@@ -115,10 +115,10 @@ final class BoardServer {
         )
 
         listener.stateUpdateHandler = { [weak self] newState in
-            Task { @MainActor in self?.listenerStateChanged(newState) }
+            Task { @MainActor [weak self] in self?.listenerStateChanged(newState) }
         }
         listener.newConnectionHandler = { [weak self] connection in
-            Task { @MainActor in self?.accept(connection) }
+            Task { @MainActor [weak self] in self?.accept(connection) }
         }
         self.listener = listener
         listener.start(queue: queue)
@@ -160,7 +160,7 @@ final class BoardServer {
         connection.stateUpdateHandler = { [weak self] newState in
             switch newState {
             case .failed, .cancelled:
-                Task { @MainActor in self?.drop(id) }
+                Task { @MainActor [weak self] in self?.drop(id) }
             default:
                 break
             }
