@@ -245,36 +245,50 @@ Facts behind it, all measured rather than assumed:
   `execve`, with `fork` resolved through `dlsym` since Swift marks it
   unavailable. Everything between fork and exec is async-signal-safe C, and every
   allocation happens before it.
-- **`TerminalEmulator` is a grid, not a buffer.** A prompt addresses the cursor —
-  `oh-my-zsh` moves right, writes, moves back; readline redraws the line in
-  place; `git log` clears the screen. None of that is expressible as "append a
-  line", which is what the first version did and why it looked nothing like a
-  terminal. Implemented: cursor positioning and movement, erase in line/display,
-  insert/delete lines and characters, scroll regions, the alternate screen (so
-  `vim` and `htop` work), save/restore cursor, autowrap with deferred wrap,
-  tab stops, reverse index, and SGR including 256-colour and 24-bit.
-- **The parse loop must advance on every byte, including ones it ignores.**
-  `feed`'s `default` branch scans forward to the next control byte, but
-  `isControl` is true for *everything* under `0x20` while the `switch` only has
-  cases for `0x00`, `0x07`–`0x0D` and `0x1B`. Any other C0 byte therefore left
-  `end == index`, and `index = end` made no progress: the main thread spun on
-  one byte forever, needing no further input to keep going. A Claude Code
-  session froze the app this way; a shell and a dev server never emit those
-  bytes, so it looked solid for months. Diagnosed from the child sitting at 0%
-  CPU while the app held a core — output volume cannot do that. The profile
-  blamed an `Array` allocation, which was the empty array being allocated
-  inside the spin, not the cause.
 - **No `COLUMNS`/`LINES` in the environment.** The pty's window size is the
   truth and the shell keeps it current on SIGWINCH; exporting them just creates
   a second copy that goes stale on the first resize.
-- **Keys are encoded, not typed.** Arrows must arrive as `ESC[A`, Ctrl-C as a
-  single `0x03` so the line discipline raises SIGINT, Tab as a literal tab so
-  completion runs in the shell instead of moving focus.
-- Output is buffered under a lock and folded into the emulator at 20fps. A
-  webpack rebuild emits hundreds of writes a second, and one observable mutation
-  each spends the whole frame budget in diffing.
-- The pane's size is derived from the measured monospaced advance and pushed to
-  the pty, so `$COLUMNS` matches what is on screen.
+- Output is buffered under a lock and fed to the screen at 20fps. A webpack
+  rebuild emits hundreds of writes a second, and a redraw each spends the whole
+  frame budget in layout.
+
+**The screen is SwiftTerm, not ours.** The split is the one VS Code makes —
+`node-pty` and `xterm.js` — and the pty half is the half worth writing: the
+`TIOCSCTTY` work above is exactly what SwiftTerm's own manifest says stopped it
+adopting Swift Subprocess. The emulator half was a 744-line hand-written grid,
+and it was replaced because two of the things people complain about are not
+fixable inside it, whatever the parsing does:
+
+- **Selection is a range over the grid, not over a line.** Drawn as one `Text`
+  per row, a cross-line selection cannot be expressed at all — copying a
+  command's output was impossible rather than buggy.
+- **⌘V has to be bracketed.** A terminal that pastes raw text hands zsh a
+  multi-line paste it runs line by line. `TerminalView` implements the standard
+  `paste(_:)` responder action and wraps in `ESC[200~`/`ESC[201~` when the
+  program asked for it, so ⌘V needs no code on our side.
+
+Mouse reporting, scrollback, the alternate screen, hyperlinks and key encoding
+come with it. Four things to know:
+
+- **The session owns the `TerminalView`, and the pane only borrows it.** The
+  view *is* the emulator state, so it has to outlive every pane that shows it —
+  the same reason the shell does. `TerminalScreenView` therefore hands SwiftUI a
+  view it did not make, and carries `.id(session.id)`, because `updateNSView`
+  cannot swap the view it is given and a changed selection would otherwise leave
+  the previous session on screen.
+- **The pin is `exactVersion 1.11.2`, and it is not conservatism.** From 1.12.0
+  SwiftTerm ships a Metal renderer, and its `.metal` shader is an unconditional
+  resource — so every build of this app, on every machine, would need Xcode's
+  multi-gigabyte Metal Toolchain component (`xcodebuild -downloadComponent
+  MetalToolchain`) for a renderer we do not use. Unpin it only together with
+  that download, and expect the delegate to have grown `clipboardRead`.
+- **`TerminalView` is ambiguous in this target.** Ours is the SwiftUI pane in
+  `Views/Terminal/`; SwiftTerm's is the `NSView`. An unqualified mention in a
+  delegate signature resolves to ours and fails as "does not conform to
+  protocol", naming neither type. Write `SwiftTerm.TerminalView` in full.
+- **SwiftTerm keeps 500 lines of scrollback by default**, which is seconds of a
+  dev server. `changeHistorySize` raises it to 5,000 and also updates the options
+  the buffer is rebuilt from, so it survives the reset each run does.
 
 **Files** is a read-only browser: lazy per-directory listing (a repository with
 `node_modules` has hundreds of thousands of files, so nothing is walked up

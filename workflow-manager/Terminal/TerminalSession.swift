@@ -9,14 +9,22 @@
 //  Ctrl-C and `cd` all behave normally afterwards, and why there is only one
 //  code path to get wrong.
 //
-//  Output arrives on a background queue in 8KB chunks and has to reach SwiftUI.
-//  It is buffered under a lock and folded into the emulator on a timer rather
-//  than per chunk: a webpack rebuild emits hundreds of writes a second, and one
-//  observable mutation each would spend the whole frame budget in diffing.
+//  The screen is SwiftTerm's `TerminalView`, which is the same split VS Code
+//  makes: our own pty on one side (`InteractiveShell`, the `node-pty` half) and
+//  a maintained xterm emulator on the other (the `xterm.js` half). It is owned
+//  by the *session*, not by the pane that shows it, for the same reason the
+//  shell is: switching tabs must not lose the screen.
+//
+//  Output arrives on a background queue in 8KB chunks and has to reach the
+//  view. It is buffered under a lock and fed on a timer rather than per chunk: a
+//  webpack rebuild emits hundreds of writes a second, and a redraw each spends
+//  the whole frame budget in layout.
 //
 
+import AppKit
 import Foundation
 import Observation
+import SwiftTerm
 
 @MainActor
 @Observable
@@ -38,18 +46,12 @@ final class TerminalSession: Identifiable {
     private(set) var state: State = .idle
     private(set) var startedAt: Date?
 
-    /// The screen. Rebuilt incrementally as bytes arrive.
-    private(set) var screen = TerminalEmulator(columns: 100, rows: 30)
-
-    /// Whether the pane should keep itself pinned to the newest output.
+    /// The screen: emulator, renderer, selection and keyboard in one view.
     ///
-    /// Lives on the session, not the view, so it survives switching away and
-    /// back — the session outlives every pane that shows it. Scrolling up to
-    /// read something is a statement that you want to stay there, and a `git
-    /// log` or a chatty dev server should not drag you back down mid-sentence.
-    /// Scrolling to the bottom again opts back in, which is how every terminal
-    /// behaves.
-    var followsTail = true
+    /// Not observable — it is an `NSView` that mutates constantly and redraws
+    /// itself, so putting it in the observation graph would invalidate SwiftUI
+    /// on every byte for no gain.
+    @ObservationIgnored let terminalView: SwiftTerm.TerminalView
 
     private var shell: InteractiveShell?
     /// Whether the last close was asked for.
@@ -58,8 +60,8 @@ final class TerminalSession: Identifiable {
     /// from a job-control shell often leaves 1 — so reporting the raw code makes
     /// a perfectly normal close look like a crash.
     private var wasStoppedDeliberately = false
-    private let incoming = ByteBuffer()
-    private var drainTask: Task<Void, Never>?
+    @ObservationIgnored private let incoming = ByteBuffer()
+    @ObservationIgnored private var drainTask: Task<Void, Never>?
 
     /// 20fps: smooth to read, and cheap.
     private static let drainInterval: Duration = .milliseconds(50)
@@ -76,6 +78,11 @@ final class TerminalSession: Identifiable {
         self.title = title
         self.command = command
         self.directory = directory
+        self.terminalView = SwiftTerm.TerminalView(
+            frame: CGRect(x: 0, y: 0, width: 640, height: 400),
+            font: NSFont.monospacedSystemFont(ofSize: 12, weight: .regular)
+        )
+        configureTerminalView()
     }
 
     var isRunning: Bool { state == .running }
@@ -89,7 +96,11 @@ final class TerminalSession: Identifiable {
         }
     }
 
-    var plainTextOutput: String { screen.allText }
+    /// Everything on screen and in scrollback, for "Copy Output".
+    var plainTextOutput: String {
+        let data = terminalView.getTerminal().getBufferAsData()
+        return String(data: data, encoding: .utf8) ?? ""
+    }
 
     // MARK: - Lifecycle
 
@@ -97,10 +108,8 @@ final class TerminalSession: Identifiable {
     func startShell() {
         guard !isRunning else { return }
 
-        screen = TerminalEmulator(
-            columns: screen.columns,
-            rows: screen.rows
-        )
+        let terminal = terminalView.getTerminal()
+        terminal.resetToInitialState()
         state = .running
         startedAt = .now
         // Reset per run, or one deliberate close would mask every later crash.
@@ -113,8 +122,8 @@ final class TerminalSession: Identifiable {
         do {
             try shell.start(
                 directory: directory,
-                columns: screen.columns,
-                rows: screen.rows,
+                columns: terminal.cols,
+                rows: terminal.rows,
                 onOutput: { data in buffer.append(data) },
                 onExit: { [weak self] code in
                     Task { @MainActor [weak self] in self?.finish(code: code) }
@@ -163,12 +172,6 @@ final class TerminalSession: Identifiable {
         send(TerminalKeys.control("C") ?? "")
     }
 
-    func resize(columns: Int, rows: Int) {
-        guard columns != screen.columns || rows != screen.rows else { return }
-        screen.resize(columns: columns, rows: rows)
-        shell?.resize(columns: columns, rows: rows)
-    }
-
     /// Ends the shell and everything it started.
     func stop() {
         wasStoppedDeliberately = true
@@ -189,11 +192,71 @@ final class TerminalSession: Identifiable {
         if isRunning {
             send(TerminalKeys.control("L") ?? "")
         } else {
-            screen = TerminalEmulator(columns: screen.columns, rows: screen.rows)
+            terminalView.getTerminal().resetToInitialState()
         }
     }
 
     // MARK: - Plumbing
+
+    /// Colours and behaviour. The defaults are close, but three of them are
+    /// wrong for this app: the light background, Option-as-Meta (which we want,
+    /// so it stays) and mouse reporting (likewise).
+    private func configureTerminalView() {
+        terminalView.terminalDelegate = self
+        // Option sends ESC, the way a terminal does; Command stays with the app
+        // so ⌘C, ⌘V and the menu bar keep working.
+        terminalView.optionAsMetaKey = true
+        // So a click in `vim` or `htop` lands where it was aimed. Selection is
+        // still reachable while a program grabs the mouse: hold Shift.
+        terminalView.allowMouseReporting = true
+
+        terminalView.nativeBackgroundColor = NSColor(
+            srgbRed: 0.11, green: 0.11, blue: 0.12, alpha: 1
+        )
+        terminalView.nativeForegroundColor = NSColor(
+            srgbRed: 0.85, green: 0.86, blue: 0.88, alpha: 1
+        )
+        terminalView.caretColor = NSColor(
+            srgbRed: 0.85, green: 0.86, blue: 0.88, alpha: 0.85
+        )
+        terminalView.installColors(Self.palette)
+
+        // SwiftTerm keeps 500 lines of history, which is a couple of seconds of
+        // a chatty dev server. `changeHistorySize` also updates the options the
+        // buffer is rebuilt from, so it survives the reset in `startShell`.
+        terminalView.getTerminal().changeHistorySize(Self.scrollbackLines)
+    }
+
+    /// Matches what the app's own emulator kept before SwiftTerm replaced it.
+    private static let scrollbackLines = 5_000
+
+    /// The first sixteen ANSI colours, on a dark background. The other 240 are
+    /// generated by the emulator from the standard cube.
+    ///
+    /// SwiftTerm's components are 16-bit, and only that initialiser is public —
+    /// hence `× 257`, which maps 0…255 onto 0…65535 exactly (0xFF → 0xFFFF).
+    private static let palette: [SwiftTerm.Color] = [
+        rgb(0x42, 0x45, 0x4D),   // black
+        rgb(0xEB, 0x66, 0x66),   // red
+        rgb(0x78, 0xCC, 0x70),   // green
+        rgb(0xE6, 0xBF, 0x61),   // yellow
+        rgb(0x6B, 0xA3, 0xED),   // blue
+        rgb(0xC7, 0x87, 0xE6),   // magenta
+        rgb(0x5C, 0xC7, 0xD1),   // cyan
+        rgb(0xC7, 0xC9, 0xD1),   // white
+        rgb(0x73, 0x78, 0x82),   // bright black
+        rgb(0xFF, 0x85, 0x85),   // bright red
+        rgb(0x94, 0xE6, 0x8A),   // bright green
+        rgb(0xFA, 0xDB, 0x7A),   // bright yellow
+        rgb(0x8C, 0xBD, 0xFF),   // bright blue
+        rgb(0xE0, 0xA6, 0xFF),   // bright magenta
+        rgb(0x7A, 0xE6, 0xF0),   // bright cyan
+        rgb(0xF5, 0xF5, 0xF7),   // bright white
+    ]
+
+    private static func rgb(_ red: UInt16, _ green: UInt16, _ blue: UInt16) -> SwiftTerm.Color {
+        SwiftTerm.Color(red: red * 257, green: green * 257, blue: blue * 257)
+    }
 
     private func startDraining() {
         drainTask?.cancel()
@@ -210,7 +273,7 @@ final class TerminalSession: Identifiable {
     private func drain() {
         let data = incoming.take()
         guard !data.isEmpty else { return }
-        screen.feed(data)
+        terminalView.feed(byteArray: [UInt8](data)[...])
     }
 
     private func finish(code: Int32) {
@@ -224,6 +287,43 @@ final class TerminalSession: Identifiable {
         drainTask = nil
         Task { @MainActor [weak self] in self?.drain() }
     }
+}
+
+// MARK: - The view's side of the wire
+
+/// `@preconcurrency` because `TerminalViewDelegate` carries no isolation of its
+/// own. Every call comes from an `NSView` on the main thread, which is what the
+/// annotation asserts rather than assumes.
+///
+/// Every `TerminalView` below is written out in full: this app has its own
+/// `TerminalView`, the SwiftUI pane in `Views/Terminal/`, and an unqualified
+/// name resolves to *that* one — which fails as "does not conform to protocol"
+/// with no mention of the two types it is actually comparing.
+extension TerminalSession: @preconcurrency TerminalViewDelegate {
+    /// Everything the user types, pastes, or clicks while a program is reading
+    /// the mouse. The view does the encoding — bracketed paste included, which
+    /// is what stops a multi-line paste from executing itself line by line.
+    func send(source: SwiftTerm.TerminalView, data: ArraySlice<UInt8>) {
+        shell?.send(Data(data))
+    }
+
+    /// The view sizes itself from the font and its frame, then reports the grid
+    /// it settled on. Pushing that to the pty is what raises `SIGWINCH` and
+    /// makes `$COLUMNS` agree with what is on screen.
+    func sizeChanged(source: SwiftTerm.TerminalView, newCols: Int, newRows: Int) {
+        shell?.resize(columns: newCols, rows: newRows)
+    }
+
+    /// OSC 52, which lets a program running in the terminal write the system
+    /// clipboard. Deliberately ignored — silently replacing what someone copied
+    /// is not a thing a shell should be able to do behind their back, and it is
+    /// what SwiftTerm's own default does.
+    func clipboardCopy(source: SwiftTerm.TerminalView, content: Data) {}
+
+    func setTerminalTitle(source: SwiftTerm.TerminalView, title: String) {}
+    func hostCurrentDirectoryUpdate(source: SwiftTerm.TerminalView, directory: String?) {}
+    func scrolled(source: SwiftTerm.TerminalView, position: Double) {}
+    func rangeChanged(source: SwiftTerm.TerminalView, startY: Int, endY: Int) {}
 }
 
 /// A lock-guarded byte queue. The pty reader fills it from a background queue;

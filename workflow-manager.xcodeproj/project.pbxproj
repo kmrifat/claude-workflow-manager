@@ -9,6 +9,7 @@
 /* Begin PBXBuildFile section */
 		35DC1462301BDB93003C98BC /* ClaudeWMWire in Frameworks */ = {isa = PBXBuildFile; productRef = 35DC1461301BDB93003C98BC /* ClaudeWMWire */; };
 		35DC147A301BDB93003C98BC /* ClaudeWMWire in Frameworks */ = {isa = PBXBuildFile; productRef = 35DC1479301BDB93003C98BC /* ClaudeWMWire */; };
+		35DC14B0301BDB93003C98BC /* SwiftTerm in Frameworks */ = {isa = PBXBuildFile; productRef = 35DC14B1301BDB93003C98BC /* SwiftTerm */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -35,6 +36,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				35DC1462301BDB93003C98BC /* ClaudeWMWire in Frameworks */,
+				35DC14B0301BDB93003C98BC /* SwiftTerm in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -88,6 +90,7 @@
 			name = "workflow-manager";
 			packageProductDependencies = (
 				35DC1461301BDB93003C98BC /* ClaudeWMWire */,
+				35DC14B1301BDB93003C98BC /* SwiftTerm */,
 			);
 			productName = "workflow-manager";
 			productReference = 35DC1448301BDB93003C98BC /* Claude WM.app */;
@@ -142,6 +145,7 @@
 			minimizedProjectReferenceProxies = 1;
 			packageReferences = (
 				35DC1460301BDB93003C98BC /* XCLocalSwiftPackageReference "Wire" */,
+				35DC14B2301BDB93003C98BC /* XCRemoteSwiftPackageReference "SwiftTerm" */,
 			);
 			preferredProjectObjectVersion = 77;
 			productRefGroup = 35DC1449301BDB93003C98BC /* Products */;
@@ -314,6 +318,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
@@ -347,6 +352,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
+				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
@@ -473,6 +479,17 @@
 		};
 /* End XCLocalSwiftPackageReference section */
 
+/* Begin XCRemoteSwiftPackageReference section */
+		35DC14B2301BDB93003C98BC /* XCRemoteSwiftPackageReference "SwiftTerm" */ = {
+			isa = XCRemoteSwiftPackageReference;
+			repositoryURL = "https://github.com/migueldeicaza/SwiftTerm.git";
+			requirement = {
+				kind = exactVersion;
+				version = 1.11.2;
+			};
+		};
+/* End XCRemoteSwiftPackageReference section */
+
 /* Begin XCSwiftPackageProductDependency section */
 		35DC1461301BDB93003C98BC /* ClaudeWMWire */ = {
 			isa = XCSwiftPackageProductDependency;
@@ -481,6 +498,11 @@
 		35DC1479301BDB93003C98BC /* ClaudeWMWire */ = {
 			isa = XCSwiftPackageProductDependency;
 			productName = ClaudeWMWire;
+		};
+		35DC14B1301BDB93003C98BC /* SwiftTerm */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 35DC14B2301BDB93003C98BC /* XCRemoteSwiftPackageReference "SwiftTerm" */;
+			productName = SwiftTerm;
 		};
 /* End XCSwiftPackageProductDependency section */
 	};
