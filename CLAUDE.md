@@ -122,6 +122,12 @@ Keep the app's DerivedData out of `.build/`, which belongs to SPM:
 xcodebuild -project workflow-manager.xcodeproj -scheme workflow-manager -destination 'platform=macOS' -derivedDataPath .xcbuild build
 ```
 
+Signed, notarized and packaged for distribution (see *Shipping the app*):
+
+```bash
+Tools/release.sh
+```
+
 ## Data locations
 
 `~/Library/Application Support/WorkflowHost/` holds `config.json` and
@@ -306,6 +312,38 @@ containment check written as `hasPrefix(rootPath + "/")` tests for `…/repo//` 
 is false for *every* subfolder. `TerminalCommand.path(_:isInside:)` strips it
 first. This one is nasty because it fails silently and looks exactly like the
 path-escape rejection it is meant to be.
+
+## Shipping the app
+
+**Developer ID and notarization, never the Mac App Store.** `Tools/release.sh`
+archives, exports with a Developer ID certificate, notarizes, staples and builds
+a DMG. This is the same channel VS Code, iTerm2, Ghostty, Zed and Docker use —
+none of them is on the store either — and it is a first-class Apple path, not a
+workaround: same developer account, no review queue, no sandbox.
+
+The store is closed to this app by construction, and it is worth being precise
+about why, because the terminal usually gets the blame. A sandboxed child
+process **inherits its parent's container**, so the sandbox does not merely
+forbid spawning `gh`, `git`, `claude` and a login shell — it makes them useless:
+a shell that cannot write to your checkout, cannot see `/opt/homebrew`, and
+cannot run `claude` from an nvm path. Deleting the terminal would change
+nothing; Issues, Files, the git reader and the Claude integration are all built
+the same way.
+
+Two details the script encodes:
+
+- **Notarization needs the Hardened Runtime, and that is all it needs.** It is
+  already on for both configurations. Spawning children is allowed under it; the
+  restrictions that bite — JIT, unsigned libraries, `DYLD_*` injection — are ones
+  this app never used.
+- **The app is stapled before the DMG is built.** A disk image is read-only, so
+  an app stapled only after packaging is not stapled at all, and every first
+  launch then needs a working network connection.
+
+Credentials stay with the operator: a "Developer ID Application" certificate in
+the keychain, and a `notarytool store-credentials` profile holding an
+app-specific password. The script reads neither and refuses to start without
+them.
 
 ## The phone client
 
