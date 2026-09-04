@@ -1,14 +1,118 @@
-# Claude WM
+<p align="center">
+  <img src="Docs/banner.png" width="860"
+       alt="Claude WM — a macOS kanban board that mirrors your GitHub issues and hands work to Claude Code">
+</p>
 
-A kanban board for your projects that mirrors a linked repository's GitHub
-issues and hands work to Claude Code — without leaving the window.
+<p align="center">
+  <a href="https://github.com/kmrifat/claude-workflow-manager/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/kmrifat/claude-workflow-manager?style=flat-square&label=download&color=0F5F58"></a>
+  <img alt="macOS 26.5+" src="https://img.shields.io/badge/macOS-26.5%2B-0F5F58?style=flat-square">
+  <img alt="Apple Silicon" src="https://img.shields.io/badge/Apple%20Silicon-arm64-0F5F58?style=flat-square">
+  <img alt="Swift" src="https://img.shields.io/badge/Swift-SwiftUI%20%C2%B7%20SwiftData-0F5F58?style=flat-square">
+</p>
 
-This repository holds **two unrelated products**. They share no code, no build
-system and no Swift language mode; neither depends on the other.
+**Claude WM** is a kanban board for the projects you actually work on. Point a
+board at a Git clone and the window fills in around it: that repository's open
+GitHub issues, a real terminal, a file browser — and a card you can hand to
+Claude Code, then watch move itself to *In Progress* and on to *Review* with a
+branch and a PR attached.
+
+Everything is local. There is no account, no server and no telemetry; your
+GitHub auth is whatever `gh` already holds, and the app never sees a token.
+
+<p align="center">
+  <img src="Docs/screenshot.png" width="960"
+       alt="The Board view: projects grouped in the sidebar, and a board with Backlog, To Do, In Progress, Review and Done columns">
+</p>
+
+---
+
+## Install
+
+### Download the app
+
+No Xcode, no build. **[Download the latest release][latest]**, open
+`ClaudeWM-1.0-arm64.dmg`, and drag **Claude WM** into your Applications folder.
+
+[latest]: https://github.com/kmrifat/claude-workflow-manager/releases/latest
+
+> [!IMPORTANT]
+> **The first launch will be refused, and that is expected.** These builds are
+> ad-hoc signed rather than notarized, so macOS blocks them until you say
+> otherwise. Open **System Settings ▸ Privacy & Security**, scroll to the
+> bottom, and click **Open Anyway** next to the message about Claude WM. Then
+> open the app again. One command does the same thing:
+>
+> ```bash
+> xattr -dr com.apple.quarantine "/Applications/Claude WM.app"
+> ```
+
+### What you need
+
+| | |
+|---|---|
+| **macOS 26.5 or later** | Required. The app will not launch on anything older. |
+| **Apple Silicon** | The released build is arm64 only; it does not run on Intel Macs. |
+| [`gh`](https://cli.github.com) | Only for the **Issues** view. Install it, then run `gh auth login`. |
+| [`claude`](https://claude.com/claude-code) | Only for the Claude features. npm, nvm, bun and volta installs are all found automatically. |
+
+Nothing but macOS is needed to open the app and use a board — the rest light up
+the features that depend on them.
+
+---
+
+## Getting started
+
+**1. Make a project.** Click **＋ Add Project** at the foot of the sidebar. You get a board with the
+default columns straight away; drag cards between them, and ⌘Z undoes anything.
+A project needs no repository at all if all you want is a board.
+
+**2. Link a repository** to unlock the rest. Open the **⋯** menu in the
+toolbar ▸ **Link Repository…**, which drops you in the Issues view to pick a
+local Git clone. Issues, Terminal and Files all appear once it is linked.
+
+**3. Switch views** from the toolbar, or with **⌥⌘1–6**:
+
+| | View | What it is |
+|---|---|---|
+| ⌥⌘1 | **Board** | Kanban columns. Drag to reorder, click a card for its details. |
+| ⌥⌘2 | **List** | The same items as a sortable table. |
+| ⌥⌘3 | **Timeline** | Items laid out across their dates. |
+| ⌥⌘4 | **Issues** | The repository's open GitHub issues, via `gh`. |
+| ⌥⌘5 | **Terminal** | Real interactive shells, and saved commands you can re-run. |
+| ⌥⌘6 | **Files** | A read-only browser of the working copy, syntax highlighted. |
+
+**4. Try the terminal.** Open **Terminal** and hit **＋**. That is a real login
+shell in your repository — your prompt, your history, `cd` that sticks, Ctrl-C
+that actually interrupts. Save the commands you run constantly (`npm run dev`,
+`swift test`) and **Run All** starts them together.
+
+**5. Hand a card to Claude.** Turn on **Sync Board with Claude** in that same
+**⋯** menu, then open a card and choose **Send to Claude**. The board is
+mirrored into `.taskboard/tasks.json`; a `claude` session in that repository
+picks the card up, sets it to *In Progress* when it starts, and moves it to
+*Review* with the branch and PR URL when it opens one.
+
+This one is opt-in and off by default for a reason: switching it on means
+writing a file into your repository and letting an agent move your cards.
+
+**6. Use it from your phone**, if you want to. **Phone Access…** starts a
+LAN-only server and shows a QR code; the iOS client pairs by scanning it. The
+board, the terminal and the file browser are three separate switches, because
+showing somebody your board should not also hand them a shell.
+
+Stuck anywhere? The app carries its own guide — **Help ▸ Claude WM Help**, or
+just **⌘?**.
+
+---
+
+## What's in this repository
+
+Two unrelated products, sharing no code, no build system and no Swift language
+mode. Neither depends on the other.
 
 | | Lives in | Is |
 |---|---|---|
-| **Claude WM** | `workflow-manager.xcodeproj`, `workflow-manager/` | A macOS SwiftUI + SwiftData app: kanban board, GitHub issue mirror, real terminal, file browser. |
+| **Claude WM** | `workflow-manager.xcodeproj`, `workflow-manager/` | The macOS app above: kanban board, GitHub issue mirror, real terminal, file browser, iOS client. |
 | **WorkflowHost** | `Package.swift`, `Packages/`, `Apps/` | A headless daemon that polls GitHub, serves a dashboard, and can dispatch Claude Code runs across repos. |
 
 Both reach GitHub, and deliberately do it differently: the app shells out to
@@ -22,21 +126,9 @@ wrong.
 
 ---
 
-## Claude WM (the app)
+## Claude WM in detail
 
-### What it does
-
-Each project is a board. Point one at a local Git clone and the
-repository-backed views light up. Switch between them from the toolbar, or with
-**⌥⌘1–6**:
-
-- **Board** — kanban columns, drag to reorder, ⌘Z to undo.
-- **List** — the same items as a sortable table.
-- **Timeline** — items laid out across their dates.
-- **Issues** — the repository's open GitHub issues, fetched with `gh` and cached
-  so the board paints instantly.
-- **Terminal** — saved commands and live interactive shells for the repository.
-- **Files** — a read-only browser of the working copy, with syntax highlighting.
+### Cards
 
 Cards carry priority, owner, dates, tags, Markdown notes and a subtask
 checklist. A card can be **blocked by** other cards — the picker refuses to
@@ -84,22 +176,15 @@ Conflicts are resolved by **field ownership**, not last-writer-wins: Claude owns
 and `requested`. Everything the agent writes is treated as untrusted — malformed
 JSON keeps the last good board rather than clearing it.
 
-### Requirements
+### Build from source
 
-- macOS 26.5 or later
-- Xcode 26
-- [`gh`](https://cli.github.com), authenticated (`gh auth login`) — required for
-  the Issues view
-- `claude` on your machine for the Claude features (npm, nvm, bun and volta
-  installs are all located automatically)
-
-### Build and run
+You need **Xcode 26**. Then:
 
 ```bash
 xcodebuild -project workflow-manager.xcodeproj -scheme workflow-manager -destination 'platform=macOS' -derivedDataPath .xcbuild build
 ```
 
-Or just open `workflow-manager.xcodeproj` and hit run. The product is
+Or open `workflow-manager.xcodeproj` and hit run. The product is
 `Claude WM.app`; the Xcode target and source folder are still named
 `workflow-manager`, which is deliberate — see `CLAUDE.md`.
 
