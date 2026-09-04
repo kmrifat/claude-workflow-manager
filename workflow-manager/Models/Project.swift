@@ -23,6 +23,11 @@ final class Project {
     var createdAt: Date = Date.now
     var sortOrder: Double = 0
 
+    /// User-defined sidebar group ("folder"). `nil` or empty means ungrouped.
+    /// Local organization only — nothing syncs it. Optional with no default, so
+    /// it stays a lightweight SwiftData migration.
+    var groupName: String?
+
     // MARK: - Linked GitHub repository
     //
     // A project can point at a local clone. Nothing about the repository is
@@ -174,6 +179,14 @@ final class Project {
     var totalCount: Int { allItems.count }
 
     var openCount: Int { totalCount - completedCount }
+
+    /// Cards sitting in an `in_progress`-role column — the "being worked on now"
+    /// count the sidebar rolls up for a collapsed group.
+    var inProgressCount: Int {
+        orderedColumns
+            .filter { $0.role == .inProgress }
+            .reduce(0) { $0 + $1.orderedItems.count }
+    }
 
     var overdueCount: Int { allItems.count(where: \.isOverdue) }
 

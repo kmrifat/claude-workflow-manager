@@ -97,6 +97,9 @@ struct ContentView: View {
 
             let service = BoardService(context: context)
             service.didMutate = { syncCoordinator.boardChanged($0) }
+            // The same terminal sessions the Mac shows, so a phone attaches to
+            // the dev server already running rather than starting a second one.
+            service.attachRepositoryAccess(terminals: terminalStore)
             boardServer.handler = service
             boardService = service
 

@@ -66,6 +66,21 @@ final class TerminalSession: Identifiable {
     /// 20fps: smooth to read, and cheap.
     private static let drainInterval: Duration = .milliseconds(50)
 
+    /// Watches this session on behalf of connected phones. One slot rather than
+    /// a list: the relay is a single object that mirrors every session, and the
+    /// Mac's own UI needs none of this because it observes the session directly.
+    @ObservationIgnored weak var mirror: (any TerminalSessionMirror)?
+
+    /// Recent raw output, so a phone attaching to a session that has been
+    /// running for an hour sees a screen rather than a blank one.
+    @ObservationIgnored private var replay = ReplayBuffer()
+
+    /// Raw pty bytes, not rendered text. Fed to the phone's own emulator, it
+    /// reproduces the Mac's screen exactly — colours, cursor moves, the lot.
+    /// Sending the rendered buffer instead was the obvious alternative and
+    /// throws away everything that makes a terminal look like one.
+    var replayData: Data { replay.contents }
+
     init(
         id: UUID = UUID(),
         commandUUID: UUID? = nil,
@@ -96,6 +111,15 @@ final class TerminalSession: Identifiable {
         }
     }
 
+    /// The grid the shell believes it has, which is the size anything mirroring
+    /// this session has to render at. Exposed here so callers do not have to
+    /// reach through to the emulator — the screen being SwiftTerm is this file's
+    /// business and nobody else's.
+    var gridSize: (cols: Int, rows: Int) {
+        let terminal = terminalView.getTerminal()
+        return (terminal.cols, terminal.rows)
+    }
+
     /// Everything on screen and in scrollback, for "Copy Output".
     var plainTextOutput: String {
         let data = terminalView.getTerminal().getBufferAsData()
@@ -114,6 +138,10 @@ final class TerminalSession: Identifiable {
         startedAt = .now
         // Reset per run, or one deliberate close would mask every later crash.
         wasStoppedDeliberately = false
+        // The screen was just cleared, so replaying the previous run to a phone
+        // would show it output this session no longer has.
+        replay.reset()
+        mirror?.sessionDidChangeState(self)
 
         let shell = InteractiveShell()
         self.shell = shell
@@ -132,6 +160,7 @@ final class TerminalSession: Identifiable {
         } catch {
             state = .failed(error.localizedDescription)
             self.shell = nil
+            mirror?.sessionDidChangeState(self)
             return
         }
         startDraining()
@@ -166,6 +195,14 @@ final class TerminalSession: Identifiable {
     /// Keystrokes, verbatim.
     func send(_ text: String) {
         shell?.send(text)
+    }
+
+    /// Keystrokes that are already bytes — what arrives from a phone, whose
+    /// emulator has done the same encoding ours does. Not routed through the
+    /// `String` version: a chunk can split a UTF-8 character or carry a lone
+    /// `0x03`, and neither survives a round trip through `String`.
+    func send(bytes: Data) {
+        shell?.send(bytes)
     }
 
     func interrupt() {
@@ -274,6 +311,8 @@ final class TerminalSession: Identifiable {
         let data = incoming.take()
         guard !data.isEmpty else { return }
         terminalView.feed(byteArray: [UInt8](data)[...])
+        replay.append(data)
+        mirror?.session(self, didProduce: data)
     }
 
     private func finish(code: Int32) {
@@ -285,7 +324,52 @@ final class TerminalSession: Identifiable {
         shell = nil
         drainTask?.cancel()
         drainTask = nil
+        mirror?.sessionDidChangeState(self)
         Task { @MainActor [weak self] in self?.drain() }
+    }
+}
+
+// MARK: - Mirroring to a phone
+
+/// How a session reports itself to whoever is relaying it elsewhere — today the
+/// phone client, through `RepositoryService`.
+///
+/// A protocol rather than a closure so that the two events stay together: a
+/// mirror that forwarded output but missed an exit would leave a phone watching
+/// a dev server that died ten minutes ago.
+@MainActor
+protocol TerminalSessionMirror: AnyObject {
+    func session(_ session: TerminalSession, didProduce data: Data)
+    func sessionDidChangeState(_ session: TerminalSession)
+}
+
+/// The tail of a session's output, for a phone that attaches late.
+///
+/// Bytes, not lines: this is fed straight into another emulator, so it has to be
+/// the same stream the Mac's emulator saw. The cap is generous enough to hold a
+/// screenful of almost anything and small enough that a dozen idle sessions cost
+/// nothing worth measuring.
+private struct ReplayBuffer {
+    private(set) var contents = Data()
+    private let cap = 256 * 1024
+
+    mutating func append(_ data: Data) {
+        contents.append(data)
+        guard contents.count > cap else { return }
+        // Trim to a line boundary. Cutting mid-escape-sequence hands the phone's
+        // emulator a fragment like `[31m`, which it prints as text — a screen
+        // that opens with a line of garbage looks like a decoding bug.
+        let excess = contents.count - cap
+        let tail = contents.dropFirst(excess)
+        if let newline = tail.firstIndex(of: 0x0A) {
+            contents = Data(tail[tail.index(after: newline)...])
+        } else {
+            contents = Data(tail)
+        }
+    }
+
+    mutating func reset() {
+        contents = Data()
     }
 }
 

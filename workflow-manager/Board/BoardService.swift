@@ -42,9 +42,23 @@ final class BoardService: BoardServerHandler {
     /// reachable-by-push again.
     private var deviceIDByClient: [UUID: String] = [:]
 
+    /// Terminal and Files, when the Mac's owner has enabled them. Optional so a
+    /// test can build a board-only service, and so the feature is absent rather
+    /// than merely refusing if it is ever compiled out.
+    private var repository: RepositoryService?
+
     init(context: ModelContext, expectedToken: @escaping () -> Data? = { BoardPairing.loadKey() }) {
         self.context = context
         self.expectedToken = expectedToken
+    }
+
+    /// Gives this service somewhere to send terminal and file messages. Set by
+    /// the owner after construction because the terminal store is app-level
+    /// state that outlives any one board.
+    func attachRepositoryAccess(terminals: TerminalStateStore) {
+        repository = RepositoryService(terminals: terminals) { [weak self] id in
+            self?.project(id: id)
+        }
     }
 
     // MARK: - Dispatch
@@ -60,6 +74,11 @@ final class BoardService: BoardServerHandler {
             )), to: client)
             return
         }
+
+        // Terminal and file messages are answered by `RepositoryService`, which
+        // has its own switch to turn off. It returns false for anything that is
+        // not its business, so the board's own handling below is unchanged.
+        if let repository, repository.handle(message, from: client, on: server) { return }
 
         switch message {
         case .hello(let token, let name):
@@ -98,6 +117,16 @@ final class BoardService: BoardServerHandler {
             // excluded from pushes until this socket drops.
             PushRegistry.shared.markConnected(deviceID)
 
+        case .listTerminals, .attachTerminal, .detachTerminal, .terminalInput,
+             .terminalAction, .listDirectory, .readFile:
+            // Only reached when no `RepositoryService` was attached at all, which
+            // is a build without the feature rather than one with it switched
+            // off. Both look the same from the phone, and should.
+            server.send(.failure(WireFailure(
+                code: .forbidden,
+                message: "Terminal and file access isn’t available on this Mac."
+            )), to: client)
+
         case .unrecognized(let type):
             server.send(.failure(WireFailure(
                 code: .unsupportedMutation,
@@ -130,6 +159,7 @@ final class BoardService: BoardServerHandler {
     /// becomes push-eligible again. Without this, a phone that connected once
     /// would never be pushed to — which is precisely the case APNs is for.
     func clientDisconnected(_ client: UUID) {
+        repository?.clientDisconnected(client)
         guard let deviceID = deviceIDByClient.removeValue(forKey: client) else { return }
         PushRegistry.shared.markDisconnected(deviceID)
     }

@@ -33,6 +33,18 @@ final class TerminalStateStore {
         models[projectID] = created
         return created
     }
+
+    /// A session by id, whichever project it belongs to.
+    ///
+    /// For the phone: once a client has attached, its keystrokes and its stop
+    /// button name a session and nothing else. Making them carry the project
+    /// again would be a second chance to disagree about which one it is.
+    func session(_ id: UUID) -> TerminalSession? {
+        for model in models.values {
+            if let match = model.sessions.first(where: { $0.id == id }) { return match }
+        }
+        return nil
+    }
 }
 
 @MainActor

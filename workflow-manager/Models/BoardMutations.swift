@@ -140,6 +140,77 @@ enum BoardMutations {
         }
     }
 
+    /// Gives a role-less board the roles a new one would have been created with.
+    ///
+    /// `defaultColumnSpecs` has carried roles from the start, but boards made
+    /// before it did have none, and nothing back-filled them. Such a board can
+    /// have `workflowSyncEnabled` set and still fail `isSyncing`, so the engine
+    /// never starts: the toggle is on, `.taskboard/tasks.json` exists, an agent
+    /// writes to it, and the board never moves. The only clue was one line of
+    /// text inside a menu.
+    ///
+    /// Deliberately conservative, because this runs without being asked:
+    ///
+    /// * It does nothing unless **every** column is role-less. A partial mapping
+    ///   is somebody's deliberate choice.
+    /// * It matches by name — the default names first, then the obvious
+    ///   synonyms — and never guesses positionally. A column it cannot name
+    ///   stays role-less and the UI says which statuses are unmapped.
+    ///
+    /// - Returns: whether anything changed.
+    @discardableResult
+    static func adoptDefaultRoles(for project: Project) -> Bool {
+        let columns = project.orderedColumns
+        guard columns.allSatisfy({ $0.role == nil }) else { return false }
+
+        var unclaimed = Set(ColumnRole.allCases)
+        var assigned = false
+
+        func claim(_ role: ColumnRole, for column: BoardColumn) {
+            guard unclaimed.remove(role) != nil, column.role == nil else { return }
+            setRole(role, on: column)
+            assigned = true
+        }
+
+        // Exact default names first, so "To Do" takes `todo` before "Backlog"
+        // can be considered for it.
+        for spec in defaultColumnSpecs {
+            guard let role = spec.role,
+                  let column = columns.first(where: { matches($0.name, spec.name) })
+            else { continue }
+            claim(role, for: column)
+        }
+
+        for role in ColumnRole.allCases where unclaimed.contains(role) {
+            guard let column = columns.first(where: { column in
+                column.role == nil && aliases(for: role).contains { matches(column.name, $0) }
+            }) else { continue }
+            claim(role, for: column)
+        }
+
+        // "Done" is the one role a board states in a second way.
+        if unclaimed.contains(.done),
+           let completion = columns.first(where: { $0.isCompletionColumn && $0.role == nil }) {
+            claim(.done, for: completion)
+        }
+
+        return assigned
+    }
+
+    private static func aliases(for role: ColumnRole) -> [String] {
+        switch role {
+        case .todo:       ["todo", "to do", "to-do", "next", "ready", "up next", "backlog"]
+        case .inProgress: ["in progress", "in-progress", "doing", "wip", "active", "started"]
+        case .review:     ["review", "in review", "code review", "pr", "qa", "testing", "verify"]
+        case .done:       ["done", "complete", "completed", "finished", "shipped", "closed"]
+        }
+    }
+
+    private static func matches(_ name: String, _ candidate: String) -> Bool {
+        name.trimmingCharacters(in: .whitespacesAndNewlines)
+            .compare(candidate, options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame
+    }
+
     @discardableResult
     static func addColumn(
         named name: String,
@@ -251,6 +322,30 @@ enum BoardMutations {
         project.repoOwner = repository.owner
         project.repoName = repository.name
         project.repoDefaultBranch = repository.defaultBranch
+        return project
+    }
+
+    /// Creates a project linked only to a local folder — no GitHub remote.
+    ///
+    /// A folder with no `.git`, or a repo without an `origin`, is a perfectly
+    /// normal way to start: the board, terminal, files and Claude all work off
+    /// the path alone. Only the Issues view needs a remote, and it says so
+    /// rather than blocking the folder from opening. Owner/name are left nil, so
+    /// `repoSlug` is nil and nothing tries to reach GitHub.
+    @discardableResult
+    static func createProject(
+        forFolderAt directory: URL,
+        in context: ModelContext,
+        existing: [Project]
+    ) -> Project {
+        var draft = ProjectDraft()
+        draft.name = directory.lastPathComponent
+        draft.status = .active
+        draft.symbolName = "folder"
+        draft.hasTargetEnd = false
+
+        let project = createProject(from: draft, in: context, existing: existing)
+        project.repoPath = Project.canonicalRepoPath(directory)
         return project
     }
 

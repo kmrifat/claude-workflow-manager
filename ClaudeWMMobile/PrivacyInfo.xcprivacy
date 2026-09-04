@@ -1,0 +1,37 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!--
+	  Required for App Store submission. This file lives inside ClaudeWMMobile/
+	  on purpose: the folder is a file-system-synchronized group, so the manifest
+	  is copied into the bundle as a resource — which is where Apple's tooling
+	  looks for it. (The Info.plists live at the repo root to *avoid* exactly
+	  that copying; a privacy manifest wants it.)
+
+	  Nothing is collected and nothing is tracked: the app talks only to the
+	  paired Mac over the local network, and the APNs device token goes to that
+	  Mac, not to any server of ours.
+	-->
+	<key>NSPrivacyTracking</key>
+	<false/>
+	<key>NSPrivacyTrackingDomains</key>
+	<array/>
+	<key>NSPrivacyCollectedDataTypes</key>
+	<array/>
+	<key>NSPrivacyAccessedAPITypes</key>
+	<array>
+		<!-- UserDefaults holds the paired Mac's name/service and the
+		     notifications toggle (PairedMac.swift, PhoneNotifier.swift).
+		     CA92.1: accessed only by the app itself. -->
+		<dict>
+			<key>NSPrivacyAccessedAPIType</key>
+			<string>NSPrivacyAccessedAPICategoryUserDefaults</string>
+			<key>NSPrivacyAccessedAPITypeReasons</key>
+			<array>
+				<string>CA92.1</string>
+			</array>
+		</dict>
+	</array>
+</dict>
+</plist>

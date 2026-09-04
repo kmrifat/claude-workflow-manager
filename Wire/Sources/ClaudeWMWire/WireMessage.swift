@@ -36,6 +36,28 @@ public enum ClientMessage: Sendable, Equatable {
     /// exactly the tolerance that exists for it. A version bump is for changes
     /// an old peer would *misread*, not ones it can decline.
     case registerPush(deviceID: String, token: String)
+
+    // MARK: Terminal and files
+    //
+    // Every one of these is refused unless the Mac's owner enabled repository
+    // access — see `RepositoryAccess.swift`. They are listed after the board
+    // messages because that is what they are: an addition a Mac may decline,
+    // not a new baseline.
+
+    case listTerminals(projectID: String)
+    /// Start receiving this session's output. The Mac answers with
+    /// `terminalAttached`, which carries enough recent output to paint a screen.
+    case attachTerminal(projectID: String, sessionID: String)
+    case detachTerminal(sessionID: String)
+    /// Keystrokes, already encoded — arrows as `ESC[A`, Ctrl-C as `0x03`. The
+    /// phone's emulator does that encoding, exactly as the Mac's does, so this
+    /// carries bytes rather than a description of a key.
+    case terminalInput(sessionID: String, data: Data)
+    case terminalAction(sessionID: String, action: WireTerminalAction)
+    /// `path` is repository-relative; "" is the root.
+    case listDirectory(projectID: String, path: String)
+    case readFile(projectID: String, path: String)
+
     case unrecognized(type: String)
 
     public var type: String {
@@ -45,6 +67,13 @@ public enum ClientMessage: Sendable, Equatable {
         case .requestSnapshot:  "requestSnapshot"
         case .mutate:           "mutate"
         case .registerPush:     "registerPush"
+        case .listTerminals:    "listTerminals"
+        case .attachTerminal:   "attachTerminal"
+        case .detachTerminal:   "detachTerminal"
+        case .terminalInput:    "terminalInput"
+        case .terminalAction:   "terminalAction"
+        case .listDirectory:    "listDirectory"
+        case .readFile:         "readFile"
         case .unrecognized(let type): type
         }
     }
@@ -61,16 +90,38 @@ public enum ServerMessage: Sendable, Equatable {
     case event(projectID: String, revision: Int)
     case ack(requestID: String, revision: Int)
     case failure(WireFailure)
+
+    // MARK: Terminal and files
+
+    case terminals(projectID: String, [WireTerminalRef])
+    /// Answers `attachTerminal`. `replay` is raw pty output — the same bytes the
+    /// Mac's emulator consumed — so the phone paints an identical screen by
+    /// feeding it to an emulator of its own, colours and cursor moves included.
+    /// A dump of the *rendered* text was the alternative and loses both.
+    case terminalAttached(sessionID: String, terminal: WireTerminalRef, replay: Data)
+    case terminalOutput(sessionID: String, data: Data)
+    /// The session started, exited or was resized. Sent unprompted, so a phone
+    /// watching a dev server sees it die without asking.
+    case terminalState(sessionID: String, terminal: WireTerminalRef)
+    case directory(projectID: String, path: String, entries: [WireFileNode])
+    case fileContent(projectID: String, path: String, content: WireFileContent)
+
     case unrecognized(type: String)
 
     public var type: String {
         switch self {
-        case .welcome:   "welcome"
-        case .projects:  "projects"
-        case .snapshot:  "snapshot"
-        case .event:     "event"
-        case .ack:       "ack"
-        case .failure:   "failure"
+        case .welcome:          "welcome"
+        case .projects:         "projects"
+        case .snapshot:         "snapshot"
+        case .event:            "event"
+        case .ack:              "ack"
+        case .failure:          "failure"
+        case .terminals:        "terminals"
+        case .terminalAttached: "terminalAttached"
+        case .terminalOutput:   "terminalOutput"
+        case .terminalState:    "terminalState"
+        case .directory:        "directory"
+        case .fileContent:      "fileContent"
         case .unrecognized(let type): type
         }
     }
@@ -84,6 +135,13 @@ public struct WireFailure: Codable, Sendable, Equatable {
         case unsupportedMutation
         case versionMismatch
         case rejected
+        /// Repository access is switched off on the Mac. Distinct from
+        /// `unauthorized`, which means the device is not paired at all: one is
+        /// fixed by a toggle, the other by pairing again, and a phone that
+        /// confused them would send its owner to the wrong screen.
+        case forbidden
+        case unknownSession
+        case unreadablePath
     }
 
     /// Present when the failure answers a specific `MutationRequest`.
@@ -183,6 +241,8 @@ private enum MessageKeys: String, CodingKey {
     case type, token, clientName, serverName, projectID, haveRevision
     case request, projects, snapshot, revision, requestID, failure
     case deviceID
+    case sessionID, data, action, replay, terminal, terminals
+    case path, entries, content
 }
 
 extension ClientMessage: Codable {
@@ -203,6 +263,25 @@ extension ClientMessage: Codable {
         case .registerPush(let deviceID, let token):
             try container.encode(deviceID, forKey: .deviceID)
             try container.encode(token, forKey: .token)
+        case .listTerminals(let projectID):
+            try container.encode(projectID, forKey: .projectID)
+        case .attachTerminal(let projectID, let sessionID):
+            try container.encode(projectID, forKey: .projectID)
+            try container.encode(sessionID, forKey: .sessionID)
+        case .detachTerminal(let sessionID):
+            try container.encode(sessionID, forKey: .sessionID)
+        case .terminalInput(let sessionID, let data):
+            try container.encode(sessionID, forKey: .sessionID)
+            try container.encode(data, forKey: .data)
+        case .terminalAction(let sessionID, let action):
+            try container.encode(sessionID, forKey: .sessionID)
+            try container.encode(action, forKey: .action)
+        case .listDirectory(let projectID, let path):
+            try container.encode(projectID, forKey: .projectID)
+            try container.encode(path, forKey: .path)
+        case .readFile(let projectID, let path):
+            try container.encode(projectID, forKey: .projectID)
+            try container.encode(path, forKey: .path)
         }
     }
 
@@ -237,6 +316,45 @@ extension ClientMessage: Codable {
             else { break }
             self = .registerPush(deviceID: deviceID, token: token)
             return
+        case "listTerminals":
+            guard let projectID = try? container.decode(String.self, forKey: .projectID) else { break }
+            self = .listTerminals(projectID: projectID)
+            return
+        case "attachTerminal":
+            guard let projectID = try? container.decode(String.self, forKey: .projectID),
+                  let sessionID = try? container.decode(String.self, forKey: .sessionID)
+            else { break }
+            self = .attachTerminal(projectID: projectID, sessionID: sessionID)
+            return
+        case "detachTerminal":
+            guard let sessionID = try? container.decode(String.self, forKey: .sessionID) else { break }
+            self = .detachTerminal(sessionID: sessionID)
+            return
+        case "terminalInput":
+            guard let sessionID = try? container.decode(String.self, forKey: .sessionID),
+                  let data = try? container.decode(Data.self, forKey: .data)
+            else { break }
+            self = .terminalInput(sessionID: sessionID, data: data)
+            return
+        case "terminalAction":
+            guard let sessionID = try? container.decode(String.self, forKey: .sessionID),
+                  let action = try? container.decode(WireTerminalAction.self, forKey: .action)
+            else { break }
+            self = .terminalAction(sessionID: sessionID, action: action)
+            return
+        case "listDirectory":
+            guard let projectID = try? container.decode(String.self, forKey: .projectID) else { break }
+            self = .listDirectory(
+                projectID: projectID,
+                path: (try? container.decode(String.self, forKey: .path)) ?? ""
+            )
+            return
+        case "readFile":
+            guard let projectID = try? container.decode(String.self, forKey: .projectID),
+                  let path = try? container.decode(String.self, forKey: .path)
+            else { break }
+            self = .readFile(projectID: projectID, path: path)
+            return
         default:
             break
         }
@@ -263,6 +381,27 @@ extension ServerMessage: Codable {
             try container.encode(revision, forKey: .revision)
         case .failure(let failure):
             try container.encode(failure, forKey: .failure)
+        case .terminals(let projectID, let terminals):
+            try container.encode(projectID, forKey: .projectID)
+            try container.encode(terminals, forKey: .terminals)
+        case .terminalAttached(let sessionID, let terminal, let replay):
+            try container.encode(sessionID, forKey: .sessionID)
+            try container.encode(terminal, forKey: .terminal)
+            try container.encode(replay, forKey: .replay)
+        case .terminalOutput(let sessionID, let data):
+            try container.encode(sessionID, forKey: .sessionID)
+            try container.encode(data, forKey: .data)
+        case .terminalState(let sessionID, let terminal):
+            try container.encode(sessionID, forKey: .sessionID)
+            try container.encode(terminal, forKey: .terminal)
+        case .directory(let projectID, let path, let entries):
+            try container.encode(projectID, forKey: .projectID)
+            try container.encode(path, forKey: .path)
+            try container.encode(entries, forKey: .entries)
+        case .fileContent(let projectID, let path, let content):
+            try container.encode(projectID, forKey: .projectID)
+            try container.encode(path, forKey: .path)
+            try container.encode(content, forKey: .content)
         case .unrecognized:
             break
         }
@@ -299,6 +438,52 @@ extension ServerMessage: Codable {
         case "failure":
             guard let failure = try? container.decode(WireFailure.self, forKey: .failure) else { break }
             self = .failure(failure)
+            return
+        case "terminals":
+            guard let projectID = try? container.decode(String.self, forKey: .projectID) else { break }
+            self = .terminals(
+                projectID: projectID,
+                (try? container.decode([WireTerminalRef].self, forKey: .terminals)) ?? []
+            )
+            return
+        case "terminalAttached":
+            guard let sessionID = try? container.decode(String.self, forKey: .sessionID),
+                  let terminal = try? container.decode(WireTerminalRef.self, forKey: .terminal)
+            else { break }
+            // A missing replay is an empty screen, not a broken frame — a session
+            // that has produced no output yet is the ordinary case.
+            self = .terminalAttached(
+                sessionID: sessionID,
+                terminal: terminal,
+                replay: (try? container.decode(Data.self, forKey: .replay)) ?? Data()
+            )
+            return
+        case "terminalOutput":
+            guard let sessionID = try? container.decode(String.self, forKey: .sessionID),
+                  let data = try? container.decode(Data.self, forKey: .data)
+            else { break }
+            self = .terminalOutput(sessionID: sessionID, data: data)
+            return
+        case "terminalState":
+            guard let sessionID = try? container.decode(String.self, forKey: .sessionID),
+                  let terminal = try? container.decode(WireTerminalRef.self, forKey: .terminal)
+            else { break }
+            self = .terminalState(sessionID: sessionID, terminal: terminal)
+            return
+        case "directory":
+            guard let projectID = try? container.decode(String.self, forKey: .projectID) else { break }
+            self = .directory(
+                projectID: projectID,
+                path: (try? container.decode(String.self, forKey: .path)) ?? "",
+                entries: (try? container.decode([WireFileNode].self, forKey: .entries)) ?? []
+            )
+            return
+        case "fileContent":
+            guard let projectID = try? container.decode(String.self, forKey: .projectID),
+                  let path = try? container.decode(String.self, forKey: .path),
+                  let content = try? container.decode(WireFileContent.self, forKey: .content)
+            else { break }
+            self = .fileContent(projectID: projectID, path: path, content: content)
             return
         default:
             break

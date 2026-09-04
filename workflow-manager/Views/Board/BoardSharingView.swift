@@ -19,6 +19,10 @@ struct BoardSharingView: View {
 
     /// Same key `BoardNotifier` reads, so the two cannot drift.
     @AppStorage("boardNotificationsEnabled") private var notifyOnMoves = true
+    /// Shares its key with `RemoteAccess.isEnabled`, which is what the server
+    /// reads — the constant rather than a second string literal, so the switch
+    /// and the thing it switches cannot drift apart.
+    @AppStorage(RemoteAccess.defaultsKey) private var repositoryAccess = false
 
     @State private var pairingURL: URL?
     @State private var push = PushRegistry.shared
@@ -42,6 +46,8 @@ struct BoardSharingView: View {
                     } else {
                         explanation
                     }
+                    Divider()
+                    repositoryAccessSection
                     Divider()
                     notificationsSection
                     Divider()
@@ -158,6 +164,30 @@ struct BoardSharingView: View {
                             .buttonStyle(.link)
                     }
                 }
+            }
+        }
+    }
+
+    /// The one switch in this app that decides whether a paired phone can run
+    /// commands. It says so plainly: the alternative is someone enabling it
+    /// because "terminal on my phone" sounds convenient and not realising the
+    /// QR code they showed a colleague now opens a shell.
+    private var repositoryAccessSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("Terminal and Files")
+                .font(.headline)
+            Toggle("Let paired phones use the terminal and browse files", isOn: $repositoryAccess)
+            Text("Off, a phone can only see and move cards. On, it can run any command your own terminal can — in your repositories, as you. Anyone holding the pairing QR code gets that too.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            if repositoryAccess {
+                Label(
+                    "Files are read-only. Nothing on the phone can edit, rename or delete them.",
+                    systemImage: "lock.doc"
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
             }
         }
     }

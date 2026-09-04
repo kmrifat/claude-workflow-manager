@@ -56,6 +56,10 @@ final class WorkflowSyncCoordinator {
         guard saveObserver == nil else { return }
         self.context = context
 
+        // Before anything else, and before the observer is installed so the
+        // save below cannot re-enter `reconcile`.
+        backfillSyncRoles(in: context)
+
         saveObserver = NotificationCenter.default.addObserver(
             forName: ModelContext.didSave,
             object: nil,
@@ -82,6 +86,36 @@ final class WorkflowSyncCoordinator {
     /// environment and show its status; `nil` simply means sync is off.
     func model(for project: Project) -> WorkflowSyncModel? {
         models[project.uuid]
+    }
+
+    // MARK: - Back-fill
+
+    /// Rescues boards that have sync turned on and cannot sync.
+    ///
+    /// `isSyncing` needs at least one column carrying a `ColumnRole`, and boards
+    /// created before `defaultColumnSpecs` carried roles have none. The symptom
+    /// is the worst kind: the toggle reads as on, the file exists, an agent
+    /// writes to it, and nothing ever moves.
+    ///
+    /// Only projects the user has already opted in are touched, and
+    /// `adoptDefaultRoles` refuses any board that has a role of its own.
+    private func backfillSyncRoles(in context: ModelContext) {
+        let projects = ((try? context.fetch(FetchDescriptor<Project>())) ?? [])
+            .filter { !$0.isDeleted && $0.workflowSyncEnabled && $0.hasRepository }
+
+        // Not the user's edit, so ⌘Z must not undo it. The save has to happen
+        // inside the disabled window — SwiftData registers undo at save time,
+        // not at mutation time.
+        let undoManager = context.undoManager
+        undoManager?.disableUndoRegistration()
+        defer {
+            try? context.save()
+            undoManager?.enableUndoRegistration()
+        }
+
+        for project in projects {
+            BoardMutations.adoptDefaultRoles(for: project)
+        }
     }
 
     // MARK: - Reconciliation

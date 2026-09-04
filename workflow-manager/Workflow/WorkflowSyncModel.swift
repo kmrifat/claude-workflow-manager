@@ -50,6 +50,13 @@ final class WorkflowSyncModel {
     /// all of them and cannot be forgotten at a new call site.
     private var lastWrittenIDs: Set<String> = []
 
+    /// The Claude-owned fields exactly as the app last wrote them.
+    ///
+    /// This is what tells an agent's edit apart from our own echo, and it
+    /// replaces trusting `TaskRow.source` to say so. Empty until the app has
+    /// written once, which is why the merge still falls back to `source` then.
+    private var lastWrittenRows: [String: WorkflowMerge.Baseline] = [:]
+
     /// `WorkItemEditorSheet` mutates on every keystroke. Coalescing avoids
     /// rewriting the file twenty times while someone types a title.
     private static let writeDebounce: Duration = .milliseconds(1500)
@@ -191,6 +198,15 @@ final class WorkflowSyncModel {
         guard let written else { return }
         // Teach the watcher to ignore the change it is about to see.
         watcher?.suppressEcho(of: written)
+        // Recorded only on a write that actually landed: a baseline claiming
+        // bytes that never reached the disk would read the agent's untouched
+        // file as news.
+        lastWrittenRows = Dictionary(
+            envelope.tasks.map {
+                ($0.id, WorkflowMerge.Baseline(status: $0.status, branch: $0.branch, prUrl: $0.prUrl))
+            },
+            uniquingKeysWith: { first, _ in first }
+        )
         lastWriteAt = .now
     }
 
@@ -211,6 +227,7 @@ final class WorkflowSyncModel {
         let local = snapshot(of: project)
         let reference = reference(to: project)
         let existingTombstones = tombstones
+        let baseline = lastWrittenRows
 
         // Decode and merge off the main actor: both are pure, and neither needs
         // to hold up the UI.
@@ -225,6 +242,7 @@ final class WorkflowSyncModel {
                         incoming: incoming,
                         project: reference,
                         allowCreations: true,
+                        baseline: baseline,
                         now: .now
                     )
                 )

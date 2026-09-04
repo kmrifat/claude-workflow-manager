@@ -206,10 +206,20 @@ struct ProjectDetailView: View {
                 }
                 if project.hasRepository {
                     Divider()
-                    Toggle("Sync Board with Claude", isOn: $project.workflowSyncEnabled)
+                    // Turning sync on is the moment a role-less board becomes a
+                    // problem, so it is also the moment to fix one. Written as a
+                    // custom binding rather than `.onChange` because this Toggle
+                    // lives in a Menu, which tears its content down as it closes.
+                    Toggle("Sync Board with Claude", isOn: Binding(
+                        get: { project.workflowSyncEnabled },
+                        set: { enabled in
+                            project.workflowSyncEnabled = enabled
+                            if enabled { BoardMutations.adoptDefaultRoles(for: project) }
+                        }
+                    ))
                     Button("Set Up Claude Contract…") { showsContractSheet = true }
-                    if project.workflowSyncEnabled, !project.hasSyncRoles {
-                        Text("Assign a Claude Status to at least one column to start syncing.")
+                    if project.workflowSyncEnabled, let warning = syncMappingWarning {
+                        Text(warning)
                     }
                 }
 
@@ -227,6 +237,22 @@ struct ProjectDetailView: View {
             .menuIndicator(.hidden)
             .help("Project actions")
         }
+    }
+
+    /// Why a board with sync switched on is not actually syncing, or is only
+    /// half-mapped.
+    ///
+    /// Naming the missing statuses matters more than it looks: a card Claude
+    /// moves to a status no column carries simply does not move, which is
+    /// indistinguishable from the agent having ignored the card.
+    private var syncMappingWarning: String? {
+        let missing = ColumnRole.allCases.filter { project.column(for: $0) == nil }
+        guard !missing.isEmpty else { return nil }
+        let names = missing.map(\.title).formatted(.list(type: .and))
+        guard project.hasSyncRoles else {
+            return "Not syncing: no column carries a Claude Status. Set one from a column’s menu."
+        }
+        return "\(names): no column carries this status, so Claude cannot move a card there."
     }
 
     private var filterMenu: some View {

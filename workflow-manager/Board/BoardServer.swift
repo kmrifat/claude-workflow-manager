@@ -28,8 +28,8 @@
 //  QR code, in one place, rather than split between a token and a fingerprint.
 //
 //  The cost: PSK ciphersuite plumbing is the finicky corner of Network.framework
-//  and cannot be taken on faith. `BoardServerLoopbackTests` in the scratch
-//  harness runs a real handshake against a real client for exactly that reason.
+//  and cannot be taken on faith. `Tools/loopback.sh` runs a real handshake
+//  against a real client for exactly that reason.
 //
 //  ## Threading
 //

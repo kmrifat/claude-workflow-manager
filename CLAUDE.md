@@ -128,6 +128,13 @@ Signed, notarized and packaged for distribution (see *Shipping the app*):
 Tools/release.sh
 ```
 
+The phone client against the real server, over a real TLS-PSK socket, with a
+real shell — needs a Debug build first:
+
+```bash
+Tools/loopback.sh
+```
+
 ## Data locations
 
 `~/Library/Application Support/WorkflowHost/` holds `config.json` and
@@ -399,6 +406,42 @@ someone's network is not something to do quietly.
 - `createCard` has no optimistic form. The Mac mints ids, and guessing one
   produces a card that vanishes and reappears with a different identity.
 
+### Terminal and Files on the phone
+
+Three tabs, not one screen: Board, Terminal, Files. The last two are **off until
+the Mac's owner turns them on** in Phone Access…, separately from sharing the
+board, because sharing a board and handing out a shell are not one decision —
+showing a colleague the QR code should not also give them `rm`.
+
+- **The phone attaches to the *same* session, and renders it itself.** Raw pty
+  bytes cross the wire and go into a SwiftTerm emulator on the phone — the same
+  library the Mac uses — so colour, cursor addressing, the alternate screen and
+  `htop` all survive. Sending rendered text was the alternative and loses every
+  one of them. It is not a second shell: the dev server the Mac is running is
+  the one on screen, which is the whole point, since a second one fights for
+  port 3000.
+- **The pty is never resized to the phone.** A pty has one size, and reflowing
+  it to 40 columns would reflow the desktop window someone is watching
+  mid-build. The phone renders at the Mac's grid and scales.
+- **A session keeps a 256KB tail of raw output** so a phone attaching to
+  something that has run for an hour paints a screen instead of a blank one. It
+  is trimmed at a newline: cutting mid-escape-sequence hands the phone a
+  fragment like `[31m`, which it prints as text, and a screen that opens with a
+  line of garbage reads as a decoding bug.
+- **Path safety is two checks, and neither subsumes the other.**
+  `RepositoryPath.sanitize` refuses `..` outright rather than resolving it —
+  "resolve then check" is the version people get wrong, because `a/../../b`
+  collapses to `../b` while a check run before collapsing sees a leading `a` and
+  passes it. Then the Mac resolves symlinks and re-tests containment, which is
+  the only thing that catches a symlink committed *inside* the repository
+  pointing at `~/.ssh`. `Tools/loopback.sh` tests all four escapes against a
+  real repository with a real symlink in it.
+- **Files are read-only in the protocol, not just in the UI.** There is no
+  write, rename, create or delete message to send.
+- `RepositoryService.handle` returns false for anything that is not its
+  business, so `BoardService` is unchanged; the gate is re-read per message, so
+  switching it off reaches a phone that is already connected.
+
 **Notifications are local only, and the phone's are conditional.** A card moving
 between columns posts a `UNUserNotificationCenter` notice — but only for moves
 the device can attribute to somebody else. On the Mac that is exact: the notice
@@ -503,7 +546,22 @@ skew and to a slow write landing late. This is why the encoder uses
 **Conflict resolution is field ownership, not last-writer-wins.** Claude owns
 `status`, `branch`, `prUrl` — it is the only party that observes them. The app
 owns `title`, `details`, `githubIssue`, `requested`. Timestamps only break ties
-within one side. Plain last-writer-wins fails here because the agent rewrites
+within one side.
+
+**Which side wrote a field is decided by comparing against our own last write,
+never by believing `TaskRow.source`.** The app stamps `source: "app"` on every
+row when it writes back, and an agent editing the file changes `status` and
+leaves that stamp in place — verified in session transcripts, where every
+`in_progress` write omitted `source` and only the final `done` write set it.
+Trusting the field therefore *discarded* each intermediate write and rewrote the
+file with the board's older value, so cards jumped `todo` → `done` and were
+never seen in In Progress or Review. `WorkflowMerge.Baseline` is what the app
+last wrote, per Claude-owned field; a field differing from it is somebody's
+news, whatever the row claims about itself. Comparing per field rather than
+accepting or rejecting the row whole is what preserves the case the old check
+protected: a card the user has just dragged must not be dragged back by a
+re-read of the not-yet-rewritten file. `source` survives only as the fallback
+for the first read of a file the app did not write, where there is no baseline. Plain last-writer-wins fails here because the agent rewrites
 the whole array in one atomic write, so every row carries the same timestamp and
 a title typed a second earlier gets clobbered by a rewrite that never meant to
 touch it. Deletion flows app → file only; a card missing from the file is
@@ -512,6 +570,26 @@ re-added, and a tombstone stops an agent resurrecting a deleted one.
 Everything the agent writes is untrusted: an unknown status or a bad date falls
 back rather than throwing the file out, malformed JSON keeps the last good board,
 and a `version` newer than ours is neither applied nor overwritten.
+
+**That tolerance is why the contract ships a file, not a description of one.**
+Nothing throws, so a wrong file is *accepted* and quietly means something else:
+`in-progress` reads as `todo` and moves a card backwards, a re-minted `id` makes
+a second card instead of editing the first, a dropped `tombstones` key
+resurrects a deleted one, and a fractional-second timestamp silently becomes
+now. `WorkflowTasksFile.example` is built from the real types and run through the
+real encoder — so `.taskboard/example.json` and the README's fenced copy of it
+cannot drift from what the app writes — and `WorkflowDirectory.readme` states
+those four as failure modes rather than as a schema.
+
+**A column's `ColumnRole` is what makes syncing possible at all**, and a board
+can have `workflowSyncEnabled` set with no roles: `defaultColumnSpecs` has
+carried them from the start, but boards made before it did have none and nothing
+back-filled them. `isSyncing` is then false, so the engine never starts — the
+toggle reads as on, `tasks.json` exists, an agent writes to it, and the board
+never moves. `WorkflowSyncCoordinator.start` back-fills such boards once at
+launch through `BoardMutations.adoptDefaultRoles`, which refuses any board that
+has a role of its own and matches by name only — never positionally, because
+guessing at somebody's column layout is worse than saying so.
 
 ### Two SwiftData behaviours this depends on
 

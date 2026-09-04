@@ -65,9 +65,35 @@ struct RootView: View {
                     paired = mac
                 }
             } else {
-                BoardScreen(connection: connection, browser: browser, paired: $paired)
+                MainTabs(connection: connection, browser: browser, paired: $paired)
             }
         }
         .task { browser.start() }
+    }
+}
+
+/// Board, Terminal and Files.
+///
+/// A tab bar rather than pushes from the board, because these are three places
+/// rather than three details of one — and because the board's columns are
+/// already a horizontal pager, so a swipe between sections would fight it.
+///
+/// Terminal and Files are always present, never hidden when the Mac has them
+/// switched off: a tab that vanishes is indistinguishable from a feature that
+/// does not exist, and the screen behind it can say which it is.
+struct MainTabs: View {
+    let connection: BoardConnection
+    let browser: BoardBrowser
+    @Binding var paired: PairedMac?
+
+    var body: some View {
+        TabView {
+            BoardScreen(connection: connection, browser: browser, paired: $paired)
+                .tabItem { Label("Board", systemImage: "square.stack.3d.up") }
+            TerminalScreen(connection: connection)
+                .tabItem { Label("Terminal", systemImage: "apple.terminal") }
+            FilesScreen(connection: connection)
+                .tabItem { Label("Files", systemImage: "folder") }
+        }
     }
 }

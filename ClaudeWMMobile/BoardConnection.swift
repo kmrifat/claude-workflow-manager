@@ -48,10 +48,32 @@ final class BoardConnection {
     /// landed.
     var hasPendingEdits: Bool { !inFlight.isEmpty }
 
+    /// The terminals on the Mac for the selected board, last time we asked.
+    private(set) var terminals: [WireTerminalRef] = []
+
+    /// Set when the Mac refuses a terminal or file message because the feature
+    /// is switched off there. Distinct from `lastFailure`, which is about one
+    /// action: this is a state the whole Terminal and Files UI has to reflect,
+    /// and it is cleared the moment a request succeeds.
+    private(set) var repositoryAccessRefused: String?
+
+    /// Where terminal and file replies go.
+    ///
+    /// Callbacks rather than more `@Observable` state because these are streams
+    /// aimed at one screen: terminal output belongs to the emulator that is
+    /// showing it, and publishing every 50ms chunk into the observation graph
+    /// would redraw a SwiftUI tree that does not render it. `didMutate` on the
+    /// Mac's `BoardService` is the same seam for the same reason.
+    var onTerminalAttached: ((String, WireTerminalRef, Data) -> Void)?
+    var onTerminalOutput: ((String, Data) -> Void)?
+    var onTerminalState: ((String, WireTerminalRef) -> Void)?
+    var onDirectory: ((String, [WireFileNode]) -> Void)?
+    var onFileContent: ((String, WireFileContent) -> Void)?
+
     private var connection: NWConnection?
     private var endpoint: NWEndpoint?
     private var key: Data?
-    private var selectedProjectID: String?
+    private(set) var selectedProjectID: String?
 
     /// Mutations sent and not yet acked, by request id.
     private var inFlight: [String: BoardMutation] = [:]
@@ -260,7 +282,43 @@ final class BoardConnection {
                     requestSnapshot(projectID: selectedProjectID, force: true)
                 }
             }
+            // A Mac with the feature switched off answers every terminal and
+            // file message this way. Held separately so those screens can
+            // explain themselves instead of showing an empty list.
+            if failure.code == .forbidden {
+                repositoryAccessRefused = failure.message
+            }
             lastFailure = failure.message
+
+        case .terminals(let projectID, let terminals):
+            guard projectID == selectedProjectID else { return }
+            repositoryAccessRefused = nil
+            self.terminals = terminals
+
+        case .terminalAttached(let sessionID, let terminal, let replay):
+            repositoryAccessRefused = nil
+            onTerminalAttached?(sessionID, terminal, replay)
+
+        case .terminalOutput(let sessionID, let data):
+            onTerminalOutput?(sessionID, data)
+
+        case .terminalState(let sessionID, let terminal):
+            // Keep the list in step, so backing out of an attached terminal
+            // does not show "Running" for something that just exited.
+            if let index = terminals.firstIndex(where: { $0.id == sessionID }) {
+                terminals[index] = terminal
+            }
+            onTerminalState?(sessionID, terminal)
+
+        case .directory(let projectID, let path, let entries):
+            guard projectID == selectedProjectID else { return }
+            repositoryAccessRefused = nil
+            onDirectory?(path, entries)
+
+        case .fileContent(let projectID, let path, let content):
+            guard projectID == selectedProjectID else { return }
+            repositoryAccessRefused = nil
+            onFileContent?(path, content)
 
         case .unrecognized:
             break
@@ -283,6 +341,9 @@ final class BoardConnection {
     func select(projectID: String) {
         selectedProjectID = projectID
         snapshot = nil
+        // Another board's terminals are not this board's. Left in place they
+        // would be offered for attaching and refused one tap later.
+        terminals = []
         requestSnapshot(projectID: projectID)
     }
 
@@ -294,6 +355,42 @@ final class BoardConnection {
     }
 
     func dismissFailure() { lastFailure = nil }
+
+    // MARK: - Terminal and files
+
+    func listTerminals() {
+        guard let selectedProjectID else { return }
+        send(.listTerminals(projectID: selectedProjectID))
+    }
+
+    func attachTerminal(_ sessionID: String) {
+        guard let selectedProjectID else { return }
+        send(.attachTerminal(projectID: selectedProjectID, sessionID: sessionID))
+    }
+
+    /// Told to the Mac rather than just forgotten locally: a session nobody is
+    /// watching stops being mirrored, so a phone in a pocket costs nothing.
+    func detachTerminal(_ sessionID: String) {
+        send(.detachTerminal(sessionID: sessionID))
+    }
+
+    func sendTerminalInput(_ data: Data, to sessionID: String) {
+        send(.terminalInput(sessionID: sessionID, data: data))
+    }
+
+    func act(_ action: WireTerminalAction, on sessionID: String) {
+        send(.terminalAction(sessionID: sessionID, action: action))
+    }
+
+    func listDirectory(_ path: String) {
+        guard let selectedProjectID else { return }
+        send(.listDirectory(projectID: selectedProjectID, path: path))
+    }
+
+    func readFile(_ path: String) {
+        guard let selectedProjectID else { return }
+        send(.readFile(projectID: selectedProjectID, path: path))
+    }
 
     private func send(_ message: ClientMessage) {
         guard let connection, let data = try? WireCodec.encode(ClientFrame(message: message)) else { return }

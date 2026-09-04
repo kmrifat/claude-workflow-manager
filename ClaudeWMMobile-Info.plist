@@ -44,6 +44,15 @@
 		</dict>
 	</array>
 
+	<!--
+	  The only cryptography is TLS through Network.framework, which is exempt
+	  from export documentation. Declaring it here answers App Store Connect's
+	  export-compliance question once, instead of blocking every TestFlight
+	  build on a manual answer.
+	-->
+	<key>ITSAppUsesNonExemptEncryption</key>
+	<false/>
+
 	<key>UILaunchScreen</key>
 	<dict/>
 

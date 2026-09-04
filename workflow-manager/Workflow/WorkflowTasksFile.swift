@@ -193,6 +193,78 @@ nonisolated enum WorkflowTasksFile {
         tombstones.filter { now.timeIntervalSince($0.deletedAt) < tombstoneLifetime }
     }
 
+    // MARK: - The worked example
+    //
+    // An agent handed only prose invents a shape: it drops `tombstones`, mints a
+    // fresh `id` for a row it is only editing, spells a status `in-progress`, or
+    // writes a timestamp with fractional seconds. Every one of those is accepted
+    // quietly by the tolerant decoder above and then means something other than
+    // what the agent intended.
+    //
+    // So the contract ships a file rather than a description of one. It is built
+    // out of the real types and run through the real encoder, which is the whole
+    // point: the example cannot drift from what the app writes, because it *is*
+    // what the app writes.
+
+    /// Fixed so the example is byte-for-byte identical on every write — a
+    /// regenerated example that differs only in its ids reads as a change.
+    private enum ExampleValues {
+        static let projectUUID = "0A1B2C3D-4E5F-6071-8293-A4B5C6D7E8F9"
+        static let appOwnedRow = "1D6C1F9A-8B24-4E31-9C7A-5E0F2B3D4A61"
+        static let agentFiledRow = "2E7D2FAB-9C35-4F42-AD8B-6F1E3C4E5B72"
+        static let deletedRow = "3F8E30BC-AD46-4053-BE9C-701F4D5F6C83"
+        /// 2026-01-05T09:30:00Z and friends, spelled out rather than computed.
+        static let earlier = Date(timeIntervalSince1970: 1_767_605_400)
+        static let later = Date(timeIntervalSince1970: 1_767_609_000)
+        static let deletedAt = Date(timeIntervalSince1970: 1_767_612_600)
+    }
+
+    static var example: Envelope {
+        Envelope(
+            project: ProjectRef(
+                uuid: ExampleValues.projectUUID,
+                name: "Example",
+                repo: "owner/repo"
+            ),
+            updatedAt: ExampleValues.later,
+            writer: .claude,
+            tasks: [
+                TaskRow(
+                    id: ExampleValues.appOwnedRow,
+                    title: "Reject non-numeric text in price inputs",
+                    status: .review,
+                    details: "Filter to digits and one decimal separator.",
+                    githubIssue: 412,
+                    branch: "issue-412",
+                    prUrl: "https://github.com/owner/repo/pull/418",
+                    requested: true,
+                    column: "Review",
+                    updatedAt: ExampleValues.later,
+                    source: .claude
+                ),
+                TaskRow(
+                    id: ExampleValues.agentFiledRow,
+                    title: "Follow-up: the same filter is missing on Compare-at",
+                    status: .todo,
+                    requested: false,
+                    updatedAt: ExampleValues.later,
+                    source: .claude
+                ),
+            ],
+            tombstones: [
+                Tombstone(id: ExampleValues.deletedRow, deletedAt: ExampleValues.deletedAt)
+            ]
+        )
+    }
+
+    /// The example as text, for the contract README and `.taskboard/example.json`.
+    static var exampleJSON: String {
+        guard let data = try? encode(example),
+              let text = String(data: data, encoding: .utf8)
+        else { return "{}" }
+        return text
+    }
+
     private static let decoder: JSONDecoder = {
         let decoder = JSONDecoder()
         decoder.dateDecodingStrategy = .iso8601

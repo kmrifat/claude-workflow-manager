@@ -45,6 +45,26 @@ nonisolated enum WorkflowMerge {
         var updatedAt: Date
     }
 
+    /// What the app last wrote for a row, per Claude-owned field.
+    ///
+    /// This is the evidence that a row changed. `TaskRow.source` is the agent's
+    /// own claim about itself, and agents do not make it reliably: observed
+    /// behaviour is to edit `status` in place and leave the `"source": "app"`
+    /// the app stamped on the row in its last write-back. Believing `source`
+    /// therefore *discarded* every `in_progress` and `review` write and then
+    /// reverted the file to the board's older value — cards appeared to jump
+    /// from `todo` straight to `done`, because `done` was the one write the
+    /// agent decorated correctly.
+    ///
+    /// Comparing against what we last wrote needs no cooperation from the
+    /// writer, and answers the question `source` was standing in for exactly:
+    /// is this value ours, or somebody's news?
+    struct Baseline: Sendable, Equatable {
+        var status: WorkflowTasksFile.Status
+        var branch: String?
+        var prUrl: String?
+    }
+
     /// What to change on a card the board already has.
     struct Change: Sendable, Equatable {
         var id: String
@@ -71,12 +91,17 @@ nonisolated enum WorkflowMerge {
 
     /// Merges an incoming file against the board.
     ///
-    /// - Parameter allowCreations: whether rows the agent invented become cards.
+    /// - Parameters:
+    ///   - allowCreations: whether rows the agent invented become cards.
+    ///   - baseline: the Claude-owned fields as the app last wrote them, keyed
+    ///     by row id. Empty for the first read of a file the app did not write,
+    ///     where `TaskRow.source` is the only signal there is.
     static func merge(
         local: [LocalTask],
         incoming: WorkflowTasksFile.Envelope,
         project: WorkflowTasksFile.ProjectRef,
         allowCreations: Bool,
+        baseline: [String: Baseline] = [:],
         now: Date
     ) -> Plan {
         var plan = Plan()
@@ -102,13 +127,31 @@ nonisolated enum WorkflowMerge {
             seen.insert(row.id)
 
             if let existing = localByID[row.id] {
-                // Only take the fields Claude owns, and only when it actually
-                // touched the row. A row the app last wrote has nothing new.
-                guard row.source == .claude else { continue }
+                // Only the fields Claude owns, and only where the file says
+                // something we did not put there ourselves.
+                //
+                // Each field is tested against its own baseline rather than the
+                // row being accepted or rejected whole. A value equal to our
+                // last write is not news even if the board has since moved on —
+                // that is the case the old `source` check protected: the user
+                // drags a card, and a re-read of the not-yet-rewritten file
+                // must not drag it back. With no baseline, `source` stands in.
                 var change = Change(id: row.id)
-                if row.status != existing.status { change.status = row.status }
-                if let branch = row.branch, branch != existing.branch { change.branch = branch }
-                if let prUrl = row.prUrl, prUrl != existing.prUrl { change.prUrl = prUrl }
+                if let base = baseline[row.id] {
+                    if row.status != existing.status, row.status != base.status {
+                        change.status = row.status
+                    }
+                    if let branch = row.branch, branch != existing.branch, branch != base.branch {
+                        change.branch = branch
+                    }
+                    if let prUrl = row.prUrl, prUrl != existing.prUrl, prUrl != base.prUrl {
+                        change.prUrl = prUrl
+                    }
+                } else if row.source == .claude {
+                    if row.status != existing.status { change.status = row.status }
+                    if let branch = row.branch, branch != existing.branch { change.branch = branch }
+                    if let prUrl = row.prUrl, prUrl != existing.prUrl { change.prUrl = prUrl }
+                }
                 if !change.isEmpty { plan.changes.append(change) }
                 continue
             }

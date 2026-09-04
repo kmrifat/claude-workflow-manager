@@ -25,6 +25,20 @@
 	  PBXFileSystemSynchronizedRootGroup, so a plist placed there would also be
 	  copied into the app bundle as a stray resource.
 	-->
+	<!--
+	  Phone Access (Board/BoardServer.swift) advertises `_claudewm._tcp` over
+	  Bonjour on the local network. On macOS 15+ that is gated behind the same
+	  local-network permission prompt iOS has, and the prompt uses this string.
+	  The service type must match BoardPairing.serviceType.
+	-->
+	<key>NSLocalNetworkUsageDescription</key>
+	<string>Claude WM shares your board with your iPhone over this network when Phone Access is on. Nothing leaves the local network.</string>
+
+	<key>NSBonjourServices</key>
+	<array>
+		<string>_claudewm._tcp</string>
+	</array>
+
 	<key>UTExportedTypeDeclarations</key>
 	<array>
 		<dict>

@@ -25,6 +25,7 @@ struct WorkflowContractSheet: View {
 
     private enum Document: String, CaseIterable, Identifiable {
         case readme
+        case example
         case memory
 
         var id: String { rawValue }
@@ -32,6 +33,7 @@ struct WorkflowContractSheet: View {
         var title: String {
             switch self {
             case .readme: WorkflowDirectory.readmePath
+            case .example: WorkflowDirectory.examplePath
             case .memory: "CLAUDE.md"
             }
         }
@@ -44,8 +46,20 @@ struct WorkflowContractSheet: View {
         )
     }
 
+    private var exampleText: String {
+        WorkflowTasksFile.exampleJSON
+    }
+
     private var memoryText: String {
         WorkflowDirectory.claudeMemorySnippet()
+    }
+
+    private func text(for document: Document) -> String {
+        switch document {
+        case .readme: readmeText
+        case .example: exampleText
+        case .memory: memoryText
+        }
     }
 
     var body: some View {
@@ -75,7 +89,7 @@ struct WorkflowContractSheet: View {
             .padding(.top, 10)
 
             ScrollView {
-                Text(selection == .readme ? readmeText : memoryText)
+                Text(text(for: selection))
                     .font(.system(size: 11, design: .monospaced))
                     .textSelection(.enabled)
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -87,7 +101,10 @@ struct WorkflowContractSheet: View {
             Divider()
 
             VStack(alignment: .leading, spacing: 6) {
-                Toggle("Write \(WorkflowDirectory.readmePath)", isOn: $writeReadme)
+                Toggle(
+                    "Write \(WorkflowDirectory.readmePath) and \(WorkflowDirectory.examplePath)",
+                    isOn: $writeReadme
+                )
                 Toggle("Append the block to the repository’s CLAUDE.md", isOn: $writeMemory)
                 Text("The block is delimited by markers, so applying this again replaces it rather than adding a second copy.")
                     .font(.system(size: 10))
@@ -124,6 +141,13 @@ struct WorkflowContractSheet: View {
             if writeReadme {
                 try Data(readmeText.utf8).write(
                     to: WorkflowDirectory.readmeURL(in: repository),
+                    options: .atomic
+                )
+                // Prose about a shape gets reinterpreted; a file to copy does
+                // not. It goes next to `tasks.json` so a session that has found
+                // one has found the other.
+                try Data(exampleText.utf8).write(
+                    to: WorkflowDirectory.exampleURL(in: repository),
                     options: .atomic
                 )
             }

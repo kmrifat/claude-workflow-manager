@@ -10,6 +10,7 @@
 		35DC1462301BDB93003C98BC /* ClaudeWMWire in Frameworks */ = {isa = PBXBuildFile; productRef = 35DC1461301BDB93003C98BC /* ClaudeWMWire */; };
 		35DC147A301BDB93003C98BC /* ClaudeWMWire in Frameworks */ = {isa = PBXBuildFile; productRef = 35DC1479301BDB93003C98BC /* ClaudeWMWire */; };
 		35DC14B0301BDB93003C98BC /* SwiftTerm in Frameworks */ = {isa = PBXBuildFile; productRef = 35DC14B1301BDB93003C98BC /* SwiftTerm */; };
+		35DC14C0301BDB93003C98BC /* SwiftTerm in Frameworks */ = {isa = PBXBuildFile; productRef = 35DC14C1301BDB93003C98BC /* SwiftTerm */; };
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
@@ -45,6 +46,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				35DC147A301BDB93003C98BC /* ClaudeWMWire in Frameworks */,
+				35DC14C0301BDB93003C98BC /* SwiftTerm in Frameworks */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -114,6 +116,7 @@
 			name = ClaudeWMMobile;
 			packageProductDependencies = (
 				35DC1479301BDB93003C98BC /* ClaudeWMWire */,
+				35DC14C1301BDB93003C98BC /* SwiftTerm */,
 			);
 			productName = ClaudeWMMobile;
 			productReference = 35DC1471301BDB93003C98BC /* Claude WM Mobile.app */;
@@ -352,7 +355,7 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
-				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "Apple Development";
+				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "-";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
@@ -500,6 +503,11 @@
 			productName = ClaudeWMWire;
 		};
 		35DC14B1301BDB93003C98BC /* SwiftTerm */ = {
+			isa = XCSwiftPackageProductDependency;
+			package = 35DC14B2301BDB93003C98BC /* XCRemoteSwiftPackageReference "SwiftTerm" */;
+			productName = SwiftTerm;
+		};
+		35DC14C1301BDB93003C98BC /* SwiftTerm */ = {
 			isa = XCSwiftPackageProductDependency;
 			package = 35DC14B2301BDB93003C98BC /* XCRemoteSwiftPackageReference "SwiftTerm" */;
 			productName = SwiftTerm;
