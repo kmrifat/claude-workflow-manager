@@ -535,7 +535,28 @@ Three details the script encodes:
 Credentials stay with the operator: a "Developer ID Application" certificate in
 the keychain, and a `notarytool store-credentials` profile holding an
 app-specific password. The script reads neither and refuses to start without
-them.
+them — except in `SIGNING=adhoc`, which needs neither and skips notarization.
+
+**Releases are built by `.github/workflows/release.yml`**, on publishing a
+GitHub release: it runs `Tools/release.sh` on a `macos-26` runner and attaches
+`Pitwall-<version>.dmg` and its SHA-256. The workflow only sets the stage — a
+temporary keychain holding the certificate and a notarytool profile, imported
+from repository secrets — so a Mac and CI build the same way. Things it
+relies on:
+
+- **`SIGNING=manual` in CI, never `automatic`.** Automatic signing asks Xcode
+  for a signed-in Apple account, which a runner does not have. Manual names
+  the certificate; a Developer ID app with no restricted entitlements needs no
+  provisioning profile.
+- **No secrets means ad-hoc, not failure.** The DMG still builds and the
+  workflow appends a first-launch note to the release, because "Open Anyway"
+  is not something a user would guess.
+- **Pass `CODE_SIGN_IDENTITY` by its plain name.** `xcodebuild` splits an
+  argument at its first `=`, so `CODE_SIGN_IDENTITY[sdk=macosx*]=…` becomes a
+  setting named `CODE_SIGN_IDENTITY[sdk`. The script used that spelling once
+  and could not have signed anything.
+- Pull requests touching the workflow or the script build an ad-hoc DMG as an
+  artifact, so a broken release path shows up before a release is cut.
 
 ## The phone client
 
