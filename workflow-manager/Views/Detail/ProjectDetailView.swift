@@ -12,11 +12,13 @@ import SwiftData
 
 struct ProjectDetailView: View {
     @Environment(\.modelContext) private var context
+    @Environment(\.openWindow) private var openWindow
 
     @Bindable var project: Project
     @Binding var viewMode: BoardViewMode
     @Binding var filter: BoardFilter
-    @Binding var inspectedItemID: UUID?
+    @Binding var selectedItemID: UUID?
+    var focus: FocusState<FocusPane?>.Binding
 
     @State private var editorTarget: ProjectEditorTarget?
     @State private var showsOverview = false
@@ -33,26 +35,9 @@ struct ProjectDetailView: View {
 
     private var terminals: TerminalSessionsModel { terminalStore.model(for: project.uuid) }
 
-    private var inspectedItem: WorkItem? {
-        guard let inspectedItemID else { return nil }
-        return project.allItems.first { $0.uuid == inspectedItemID }
-    }
-
-    /// The inspector shows the selected card, on the views made of cards. On
-    /// Issues, Terminal and Files there is no card to show.
-    private var inspectorPresented: Binding<Bool> {
-        Binding(
-            get: { inspectedItem != nil && !viewMode.requiresRepository },
-            set: { if !$0 { inspectedItemID = nil } }
-        )
-    }
-
-    /// The full editor, opened from the inspector's "Edit Details…".
-    @State private var editingItemID: UUID?
-
-    private var editingItem: WorkItem? {
-        guard let editingItemID else { return nil }
-        return project.allItems.first { $0.uuid == editingItemID }
+    private var selectedItem: WorkItem? {
+        guard let selectedItemID else { return nil }
+        return project.allItems.first { $0.uuid == selectedItemID }
     }
 
     /// Under the title: the repository when there is one — it is what tells
@@ -80,30 +65,6 @@ struct ProjectDetailView: View {
             .navigationSubtitle(subtitle)
             .searchable(text: $filter.searchText, prompt: "Search cards")
             .toolbar { toolbarContent }
-            .inspector(isPresented: inspectorPresented) {
-                if let inspectedItem {
-                    CardInspector(
-                        item: inspectedItem,
-                        accent: project.accent.color,
-                        onEditDetails: { editingItemID = inspectedItem.uuid },
-                        onClose: { inspectedItemID = nil }
-                    )
-                    .id(inspectedItem.uuid)
-                    .inspectorColumnWidth(min: 320, ideal: 380, max: 520)
-                }
-            }
-            .sheet(isPresented: Binding(
-                get: { editingItem != nil },
-                set: { if !$0 { editingItemID = nil } }
-            )) {
-                if let editingItem {
-                    WorkItemEditorSheet(
-                        item: editingItem,
-                        accent: project.accent.color,
-                        onClose: { editingItemID = nil }
-                    )
-                }
-            }
             .sheet(isPresented: $showsOverview) {
                 // Opening the editor from `onDismiss` avoids presenting two
                 // sheets in the same frame, which SwiftUI drops.
@@ -148,11 +109,17 @@ struct ProjectDetailView: View {
     private var content: some View {
         switch viewMode {
         case .board:
-            BoardView(project: project, inspectedItemID: $inspectedItemID, filter: filter)
+            BoardView(
+                project: project,
+                selectedItemID: $selectedItemID,
+                filter: filter,
+                focus: focus,
+                onOpenItem: open
+            )
         case .list:
-            ProjectItemsTable(project: project, inspectedItemID: $inspectedItemID, filter: filter)
+            ProjectItemsTable(project: project, selectedItemID: $selectedItemID, filter: filter, onOpen: open)
         case .timeline:
-            ProjectTimelineView(project: project, inspectedItemID: $inspectedItemID, filter: filter)
+            ProjectTimelineView(project: project, selectedItemID: $selectedItemID, filter: filter, onOpen: open)
         case .issues:
             GitHubIssuesView(project: project, searchText: filter.searchText)
         case .terminal:
@@ -231,7 +198,9 @@ struct ProjectDetailView: View {
                 .foregroundStyle(Theme.agentText)
                 .help(filter.scope == .claude ? "Show every card" : "Show only cards with Claude")
             }
-            ToolbarSpacer(.fixed)
+            if #available(macOS 26, *) {
+                ToolbarSpacer(.fixed)
+            }
         }
 
         if !viewMode.requiresRepository {
@@ -241,7 +210,7 @@ struct ProjectDetailView: View {
                 } label: {
                     Label("New Card", systemImage: "plus")
                 }
-                .help("Add a card to the first column (⇧⌘N)")
+                .help("New card in its own window (⇧⌘N)")
             }
         }
 
@@ -318,16 +287,24 @@ struct ProjectDetailView: View {
 
     // MARK: - Actions
 
+    /// ⇧⌘N and the toolbar's +: a blank card in the first column, opened in
+    /// its own window with the caret in the title. Closing it untouched
+    /// discards it.
     private func addItemToFirstColumn() {
         guard let column = project.orderedColumns.first else { return }
-        let item = BoardMutations.addItem(titled: "New item", to: column, in: context)
-        inspectedItemID = item.uuid
+        let item = BoardMutations.addItem(titled: "", to: column, in: context)
+        selectedItemID = item.uuid
+        open(item)
+    }
+
+    private func open(_ item: WorkItem) {
+        openWindow(id: CardWindow.sceneID, value: item.uuid)
     }
 
     private func deleteInspectedItem() {
-        guard let inspectedItem else { return }
-        inspectedItemID = nil
-        withAnimation(.snappy) { context.delete(inspectedItem) }
+        guard let selectedItem else { return }
+        selectedItemID = nil
+        withAnimation(.snappy) { context.delete(selectedItem) }
     }
 
     /// Opens a Claude session in the Terminal for the card named in the
@@ -345,7 +322,7 @@ struct ProjectDetailView: View {
             prompt: claudePrompt(for: item),
             in: directory
         )
-        inspectedItemID = nil
+        selectedItemID = nil
         viewMode = .terminal
     }
 
@@ -375,6 +352,7 @@ struct ProjectDetailView: View {
     @Previewable @State var mode: BoardViewMode = .board
     @Previewable @State var filter = BoardFilter()
     @Previewable @State var inspected: UUID?
+    @Previewable @FocusState var focus: FocusPane?
 
     if let project = SampleData.firstProject {
         NavigationStack {
@@ -382,7 +360,8 @@ struct ProjectDetailView: View {
                 project: project,
                 viewMode: $mode,
                 filter: $filter,
-                inspectedItemID: $inspected
+                selectedItemID: $inspected,
+                focus: $focus
             )
         }
         .modelContainer(SampleData.container)

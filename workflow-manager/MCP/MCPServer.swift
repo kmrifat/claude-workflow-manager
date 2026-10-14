@@ -388,10 +388,13 @@ final class MCPServer {
             sessions[index].calls += 1
         }
         do {
-            let result = try tools.call(name, arguments: arguments, client: client)
+            var result = try tools.call(name, arguments: arguments, client: client)
             log(Call(date: .now, client: client, tool: name, succeeded: true, message: nil))
+            let images = (result.removeValue(forKey: MCPTools.imagesKey) as? [[String: String]]) ?? []
+            let content: [[String: Any]] = [["type": "text", "text": Self.jsonString(result)]]
+                + images.map { ["type": "image", "data": $0["data"] ?? "", "mimeType": $0["mimeType"] ?? "image/jpeg"] }
             return [
-                "content": [["type": "text", "text": Self.jsonString(result)]],
+                "content": content,
                 "structuredContent": result,
                 "isError": false,
             ]

@@ -228,24 +228,71 @@ on its own); rendering and inline styling live in `Views/GitHub/`. Inline code
 needs an explicit background: SwiftUI makes it monospaced and nothing else, which
 in a body full of paths reads as random font switches.
 
-**A local card's detail is the window's inspector column** (`CardInspector`,
-SwiftUI `.inspector`), shown by selecting a card on Board, List or Timeline. It
-replaced the card popover, which covered the cards around the one it described
-and could not stay open while you worked — and with Claude reporting progress
-on a card, that progress belongs in view. It is a glance plus quick actions:
-`WorkItemEditorSheet` stays the long-form editor, behind "Edit Details…", so
-there are not two full editors to keep in step. Notes typed in its composer
-become `CardEvent`s by "You", which `get_card` hands to the agent.
+**A local card has two views: a popover and its own window.** Design:
+`design/ClaudeWM.fig` › *Cards · Popover & Editor* (C01–C03).
 
-Sheets ("Create GitHub Issue…", "Link to Existing Issue…") are presented from
-the inspector directly. A sheet presented from inside a *popover* is torn down
-with it when focus moves; an inspector is part of the window, so that
-constraint is gone.
+- **`CardPopover`**, anchored to a card on the board: a glance — column,
+  notes preview, Claude's state, fields, subtasks — and **Open in Window**
+  (⌘O). It presents no sheets: a sheet presented from inside a popover is
+  torn down with it as focus moves, so issue linking and blockers live in the
+  window.
+- **A single click's popover waits until a double-click is ruled out**
+  (≤0.3 s; selection is immediate). Shown at once, the popover is on screen by
+  the second click, and a click outside a transient popover goes to closing
+  it — so a double-click only ever toggled the popover. The double-click
+  itself is read from `NSApp.currentEvent.clickCount`, not a second gesture.
+- **`CardWindow`**, a `WindowGroup(for: UUID.self)` scene, so opening a card
+  that is already open brings its window forward. It replaced *both* the
+  inspector column and `WorkItemEditorSheet`: a sheet freezes the board behind
+  it and cannot be freely resized, and an inspector cannot show two cards side
+  by side. List and Timeline open it on double-click or Return; Overview and
+  the smart lists open it directly and stay where they are.
+- **It writes like Notes.** Date line, title as the first and largest line,
+  fields as chips (`CardFields`), then the notes. There is no Save, and a
+  window closed on a card nothing was put into (`WorkItem.isBlank`) deletes
+  it, as Notes drops an empty note — which is what makes "⇧⌘N opens a blank
+  card in a window" safe.
+- **The window needs the app's services**, so `WorkflowSyncCoordinator` and
+  `MCPServer` are owned by `ClaudeWMApp`, not `ContentView`, and injected into
+  both scenes. That also means a second main window no longer starts a second
+  MCP server on the same port.
 
-A GitHub issue still shows `GitHubIssueDetailSheet` as a popover
-(`presentation: .popover`, fixed size). A `.sheet` is neither freely resizable
-nor dismissable by clicking away, which is why its panel mode still exists and
-owns its own size.
+**Notes are Markdown styled in place, never converted** (`MarkdownTextView`,
+rules in `MarkdownStyler`). The markers stay in the string, faded; bullets and
+checkboxes are *drawn* over clear-coloured characters by
+`MarkdownLayoutManager`. The text is read by Claude over MCP, by `gh`, and by
+the phone, so it must stay Markdown — a rich-text format of our own would need
+converting at every one of those edges. Things to know:
+
+- **TextKit 1 on purpose.** `NSLayoutManager` is where glyph-level drawing
+  and line fragments live; the code panel and quote bar are built from them.
+- **The text view does not scroll; the page does.** It reports its height
+  through `sizeThatFits`, and its container width follows the frame by hand
+  (`setFrameSize`) — with `widthTracksTextView` the container kept whichever
+  width SwiftUI last *proposed*, and text wrapped short of the column.
+- **A fenced block's lines carry the attribute but the newlines between them
+  do not**, so the panel is joined from per-line runs in `drawBackground`.
+  Drawn per run, it came out striped.
+- **The checkbox markers are monospaced (and invisible)**, so `[x]` and `[ ]`
+  are the same width and ticking an item does not shift its text.
+- **Images are attachments, referenced from the Markdown.** Paste (⌘V) or
+  drop one and it becomes a `CardAttachment` (`.externalStorage`) with
+  `![name](attachment:<uuid>)` on its own line; the editor draws the picture
+  under that line in the space a paragraph spacing reserves. Not base64 in the
+  notes — it would bloat `tasks.json`, every phone snapshot and every MCP read
+  — and not files in the repository, which a card need not have and a paste
+  must not write into. Text on the pasteboard beats a picture of it (a
+  spreadsheet copy carries both). Deleting the reference line is how an image
+  is removed; unreferenced attachments are swept when the card's window
+  closes, not per keystroke, so ⌘Z of a deleted line still finds its image.
+  `get_card` sends up to four as MCP **image content**, scaled to 1568 px JPEG,
+  so Claude can see a pasted screenshot; `MCPTools.imagesKey` is how a tool
+  hands them to `MCPServer` without putting base64 in the JSON. A GitHub issue
+  created from the card gets a note in place of each image, and the phone
+  shows the reference as text.
+- **Subtasks are not Markdown checklists.** They stay their own model — the
+  board counts them and `set_subtask` ticks them — and a `- [ ]` typed in the
+  notes stays text.
 
 ## The app's sidebar and Overview
 
@@ -278,8 +325,9 @@ event log. A card is "with Claude" when it was sent (`workflowRequested`) on a
 syncing project, and its column's status says how far the agent got.
 
 Debug builds accept `-UseSampleData`, which swaps in the in-memory
-`SampleData` store, plus `-OpenProject <name>`, `-ViewMode <mode>` and
-`-OpenQueue <queue>`. Use them to launch and screenshot a dev build — **never
+`SampleData` store, plus `-OpenProject <name>`, `-ViewMode <mode>`,
+`-OpenQueue <queue>`, `-OpenCard <title>` (its window) and `-ShowCard <title>`
+(its popover on the board). Use them to launch and screenshot a dev build — **never
 point a dev build at the real store**: the first launch migrates its groups.
 
 ## The app's MCP server
@@ -459,7 +507,22 @@ cannot run `claude` from an nvm path. Deleting the terminal would change
 nothing; Issues, Files, the git reader and the Claude integration are all built
 the same way.
 
-Two details the script encodes:
+**The app runs from macOS 14 Sonoma, on Intel and Apple Silicon.** It is
+designed on macOS 26, but every Intel Mac from 2018 on can reach Sonoma and
+most stop at Sequoia (the 2019 MacBook Air at Sonoma), so a 26.5 floor locked
+all of them out. Anything newer than 14 goes behind `#available` — in
+`Support/Compatibility.swift` or at the call site (`ToolbarSpacer` is the
+macOS 26 one) — and falls back to plain system behaviour, never to a look of
+our own. Do not raise the deployment target to reach a new API; gate it. The
+check that keeps this honest is a build with `MACOSX_DEPLOYMENT_TARGET=14.0`
+`ARCHS="arm64 x86_64"`: it fails on any ungated API. `ClaudeWMWire` is on
+`.macOS(.v14)` for the same reason.
+
+Three details the script encodes:
+
+- **The app is universal.** `ARCHS="arm64 x86_64"` is passed explicitly and
+  checked with `lipo` after export: an arm64-only build fails on an Intel Mac
+  with nothing more helpful than "not supported on this Mac".
 
 - **Notarization needs the Hardened Runtime, and that is all it needs.** It is
   already on for both configurations. Spawning children is allowed under it; the

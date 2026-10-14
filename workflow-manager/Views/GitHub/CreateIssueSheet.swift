@@ -131,7 +131,12 @@ struct CreateIssueSheet: View {
             guard !didPrepare else { return }
             didPrepare = true
             title = item.title
-            issueBody = item.details
+            // `gh issue create` cannot carry the card's images, and an
+            // `attachment:` link means nothing on GitHub. Say what was there
+            // instead — the sheet shows it, so nothing is dropped silently.
+            issueBody = AttachmentReferences.replacing(in: item.details) { alt in
+                "_[Image: \(alt) — attached to the card in Pitwall]_"
+            }
             selectedLabels = Set(usableTags)
         }
     }

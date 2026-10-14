@@ -68,15 +68,50 @@ struct HelpGuideView: View {
 
     ## Cards
 
-    Click a card for a quick popover — retitle, change priority, open its issue.
-    Press **Edit Details** for the full editor.
+    Click a card on the board for a quick look — where it is, what Claude is
+    doing with it, its subtasks. **Open in Window** (or double-click the card)
+    opens it in its own window, where you write it like a note: the title on
+    the first line, the fields as chips under it, then the notes.
 
-    ### The editor
+    A new card (**⇧⌘N**, or **+** on a column) opens straight into a window
+    with the cursor in the title. It saves as you type; close it empty and it
+    is discarded.
 
-    - **Notes** support Markdown, with a **Write / Preview** toggle. The preview
-      is the same renderer used for issue bodies and card popovers.
-    - Set priority, owner, dates, tags, and a checklist of subtasks.
-    - Link the card to a GitHub issue.
+    ### Writing notes
+
+    Notes are Markdown, styled as you type: `#` makes a heading, `-` a bulleted
+    list, `- [ ]` a checklist you can tick by clicking, ``` ``` ``` a code
+    block. **⌘B** bold, **⌘I** italic, **⌘K** link, **⇧⌘L** checklist, and
+    Return carries a list on. They stay plain Markdown, so Claude and GitHub
+    read them as written.
+
+    **Paste or drop images** — a screenshot with ⌘V, or files from Finder —
+    and they appear in the notes. Double-click one to see it full size; delete
+    its line to remove it. Claude sees them too, through Pitwall's MCP server.
+
+    Subtasks are a separate list under the notes — the ones the board counts
+    and Claude can tick.
+
+    ## Keyboard
+
+    **Tab** moves from the sidebar into the board, **⇧Tab** moves back.
+
+    In the sidebar:
+
+    - **↑ ↓** move, and open what you land on. **⌘↑ ⌘↓** jump to the ends.
+    - **→** opens a folder, then steps into it. **←** closes it, then steps out.
+    - **Return** opens and moves into the board. **Space** folds and unfolds.
+    - Type a name to jump to it. **⇧⌘F** filters; **↓** from the filter goes
+      to the results.
+
+    On the board:
+
+    - **← → ↑ ↓** move between cards. **Space** shows the card's popover, as
+      Space does Quick Look; it follows the arrows while it is open.
+    - **⌘← ⌘→** move the card to the next column, **⌘↑ ⌘↓** reorder it. ⌘Z
+      undoes either.
+    - **Return** opens the card's window, **Esc** closes the popover, then
+      deselects. **⌘⌫** deletes.
 
     ## Dependencies
 

@@ -10,6 +10,7 @@
 #if DEBUG
 import Foundation
 import SwiftData
+import AppKit
 
 @MainActor
 enum SampleData {
@@ -194,6 +195,50 @@ enum SampleData {
             working.workflowBranch = "issue-57"
             working.githubIssueNumber = 57
             working.githubRepoSlug = "acme/mobile-app"
+            working.agentName = "Claude"
+            working.agentClaimedAt = .now.addingTimeInterval(-6 * 60)
+            working.details = """
+            Two requests that both find an expired token both refresh it, and the \
+            second refresh revokes the first one's new token — so one request \
+            fails with a 401 at random.
+
+            ## What done looks like
+
+            - Only **one** refresh in flight; everyone else waits for it
+            - A failed refresh signs the user out *once*, not per request
+            - [x] Reproduce with two parallel requests
+            - [ ] Serialise refreshes behind an `actor`
+
+            ```swift
+            actor TokenRefresher {
+                private var inFlight: Task<Token, Error>?
+            }
+            ```
+
+            > The API revokes the old refresh token on use — see [the auth docs](https://example.com/auth).
+            """
+            // A pasted screenshot, the way a paste stores one.
+            if let png = sampleScreenshot(), let image = AttachmentImage.normalize(png) {
+                let attachment = CardAttachment(
+                    filename: "401 after refresh.png", contentType: image.contentType, data: image.data,
+                    pixelWidth: image.pixelWidth, pixelHeight: image.pixelHeight
+                )
+                context.insert(attachment)
+                attachment.item = working
+                working.details = working.details.replacingOccurrences(
+                    of: "at random.\n",
+                    with: "at random.\n\n\(attachment.markdownReference)\n"
+                )
+            }
+            let claimed = CardEvent(actor: "Claude", tool: "claim_card", summary: "Claimed the card", note: nil)
+            claimed.date = .now.addingTimeInterval(-6 * 60)
+            let progress = CardEvent(actor: "Claude", tool: "update_card",
+                                     summary: "Editing TokenRefresher.swift", note: nil)
+            progress.date = .now.addingTimeInterval(-4 * 60)
+            for event in [claimed, progress] {
+                context.insert(event)
+                event.item = working
+            }
         }
         if let queued = columns[safe: 1]?.orderedItems.first {
             queued.workflowRequested = true
@@ -205,6 +250,31 @@ enum SampleData {
             review.githubIssueNumber = 54
             review.githubRepoSlug = "acme/mobile-app"
         }
+    }
+
+    /// A made-up error screen, drawn rather than shipped as a file, so sample
+    /// data has an image to paint without adding an asset to the app.
+    private static func sampleScreenshot() -> Data? {
+        let size = NSSize(width: 1040, height: 520)
+        guard let bitmap = NSBitmapImageRep(
+            bitmapDataPlanes: nil, pixelsWide: Int(size.width), pixelsHigh: Int(size.height),
+            bitsPerSample: 8, samplesPerPixel: 4, hasAlpha: true, isPlanar: false,
+            colorSpaceName: .deviceRGB, bytesPerRow: 0, bitsPerPixel: 0
+        ) else { return nil }
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: bitmap)
+        NSColor(srgbRed: 0.11, green: 0.12, blue: 0.15, alpha: 1).setFill()
+        NSRect(origin: .zero, size: size).fill()
+        NSColor(srgbRed: 0.85, green: 0.25, blue: 0.22, alpha: 1).setFill()
+        NSBezierPath(roundedRect: NSRect(x: 60, y: 300, width: 920, height: 150), xRadius: 18, yRadius: 18).fill()
+        let title: [NSAttributedString.Key: Any] = [.font: NSFont.systemFont(ofSize: 48, weight: .bold), .foregroundColor: NSColor.white]
+        ("401 Unauthorized" as NSString).draw(at: NSPoint(x: 100, y: 355), withAttributes: title)
+        let body: [NSAttributedString.Key: Any] = [.font: NSFont.monospacedSystemFont(ofSize: 26, weight: .regular),
+                                                   .foregroundColor: NSColor(white: 0.85, alpha: 1)]
+        ("POST /v1/orders  →  token revoked by refresh #2" as NSString).draw(at: NSPoint(x: 70, y: 200), withAttributes: body)
+        ("retry 1 of 3 · 14:02:17.381" as NSString).draw(at: NSPoint(x: 70, y: 150), withAttributes: body)
+        NSGraphicsContext.restoreGraphicsState()
+        return bitmap.representation(using: .png, properties: [:])
     }
 
     private static func seedItems(

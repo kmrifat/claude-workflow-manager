@@ -5,8 +5,8 @@
 
 <p align="center">
   <a href="https://github.com/kmrifat/claude-workflow-manager/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/kmrifat/claude-workflow-manager?style=flat-square&label=download&color=FF4F1F"></a>
-  <img alt="macOS 26.5+" src="https://img.shields.io/badge/macOS-26.5%2B-FF4F1F?style=flat-square">
-  <img alt="Apple Silicon" src="https://img.shields.io/badge/Apple%20Silicon-arm64-FF4F1F?style=flat-square">
+  <img alt="macOS 14+" src="https://img.shields.io/badge/macOS-14%2B-FF4F1F?style=flat-square">
+  <img alt="Apple Silicon and Intel" src="https://img.shields.io/badge/Apple%20Silicon%20%26%20Intel-universal-FF4F1F?style=flat-square">
   <img alt="Swift" src="https://img.shields.io/badge/Swift-SwiftUI%20%C2%B7%20SwiftData-FF4F1F?style=flat-square">
 </p>
 
@@ -55,8 +55,8 @@ the `.dmg`, and drag **Pitwall** into your Applications folder.
 
 | | |
 |---|---|
-| **macOS 26.5 or later** | Required. The app will not launch on anything older. |
-| **Apple Silicon** | The released build is arm64 only; it does not run on Intel Macs. |
+| **macOS 14 Sonoma or later** | Required. It is designed on macOS 26 and looks its best there; on 14 and 15 it uses the plain system toolbar instead of Liquid Glass. |
+| **Apple Silicon or Intel** | One universal app. Any Mac that runs Sonoma — Intel ones from 2018 on — runs it. |
 | [`gh`](https://cli.github.com) | Only for the **Issues** view. Install it, then run `gh auth login`. |
 | [`claude`](https://claude.com/claude-code) | Only for the Claude features. npm, nvm, bun and volta installs are all found automatically. |
 

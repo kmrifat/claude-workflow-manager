@@ -16,6 +16,7 @@ enum AppModelContainer {
         Subtask.self,
         TerminalCommand.self,
         CardEvent.self,
+        CardAttachment.self,
         // A disposable cache, not board data. See `IssueCacheEntry`.
         IssueCacheEntry.self,
     ])

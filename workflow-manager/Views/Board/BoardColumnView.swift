@@ -17,9 +17,12 @@ struct BoardColumnView: View {
     @Environment(\.modelContext) private var context
 
     @Bindable var column: BoardColumn
-    @Binding var inspectedItemID: UUID?
+    @Binding var selectedItemID: UUID?
     let filter: BoardFilter
     let accent: Color
+    var focus: FocusState<FocusPane?>.Binding
+    @Binding var popoverItemID: UUID?
+    var onOpenItem: (WorkItem) -> Void
 
     @State private var hoveredCardID: UUID?
     @State private var dropsAfterHovered = false
@@ -30,6 +33,8 @@ struct BoardColumnView: View {
     @State private var draftName = ""
     @FocusState private var nameFieldFocused: Bool
     @State private var showsAllDone = false
+    /// A single click's popover, held back until a double-click is ruled out.
+    @State private var pendingPopover: Task<Void, Never>?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -85,10 +90,13 @@ struct BoardColumnView: View {
                 Spacer(minLength: 0)
 
                 Button {
+                    // A blank card in its own window, caret in the title. Closing
+                    // it untouched discards it.
                     let item = withAnimation(.snappy(duration: 0.2)) {
-                        BoardMutations.addItem(titled: "New item", to: column, in: context)
+                        BoardMutations.addItem(titled: "", to: column, in: context)
                     }
-                    inspectedItemID = item.uuid
+                    selectedItemID = item.uuid
+                    onOpenItem(item)
                 } label: {
                     Image(systemName: "plus")
                         .font(.system(size: 11, weight: .semibold))
@@ -214,6 +222,19 @@ struct BoardColumnView: View {
     }
 
     private var cardList: some View {
+        ScrollViewReader { proxy in
+            cardScroller
+                .onChange(of: selectedItemID) { _, id in
+                    guard let id, column.orderedItems.contains(where: { $0.uuid == id }) else { return }
+                    // A done card picked by keyboard past the first few is
+                    // behind "Show more": open the list so it can be seen.
+                    if !visibleItems.contains(where: { $0.uuid == id }) { showsAllDone = true }
+                    withAnimation(.snappy(duration: 0.15)) { proxy.scrollTo(id) }
+                }
+        }
+    }
+
+    private var cardScroller: some View {
         ScrollView(.vertical) {
             // Not lazy: a lane holds a handful of cards, and `LazyVStack`
             // mis-estimated a queued card's extra height and opened the lane
@@ -221,6 +242,7 @@ struct BoardColumnView: View {
             VStack(spacing: column.isCompletionColumn ? 1 : 6) {
                 ForEach(visibleItems, id: \.uuid) { item in
                     card(for: item)
+                        .id(item.uuid)
                 }
 
                 let hidden = column.orderedItems.count - visibleItems.count
@@ -253,7 +275,7 @@ struct BoardColumnView: View {
     private func card(for item: WorkItem) -> some View {
         WorkItemCardView(
             item: item,
-            isSelected: inspectedItemID == item.uuid,
+            isSelected: selectedItemID == item.uuid,
             isDimmed: filter.isActive && !filter.matches(item),
             accent: accent,
             isCompact: column.isCompletionColumn
@@ -266,10 +288,18 @@ struct BoardColumnView: View {
                     .offset(y: dropsAfterHovered ? 5 : -5)
             }
         }
-        // Selects into the window's inspector (`CardInspector`); a second
-        // click on the selected card closes it.
-        .onTapGesture {
-            inspectedItemID = (inspectedItemID == item.uuid) ? nil : item.uuid
+        .onTapGesture { click(item) }
+        .popover(
+            isPresented: Binding(
+                get: { popoverItemID == item.uuid },
+                set: { if !$0, popoverItemID == item.uuid { popoverItemID = nil } }
+            ),
+            arrowEdge: .trailing
+        ) {
+            CardPopover(item: item) {
+                popoverItemID = nil
+                onOpenItem(item)
+            }
         }
         .draggable(WorkItemTransfer(itemID: item.uuid, sourceColumnID: column.uuid)) {
             WorkItemCardView(item: item, accent: accent, isCompact: column.isCompletionColumn)
@@ -296,7 +326,7 @@ struct BoardColumnView: View {
 
     @ViewBuilder
     private func cardMenu(for item: WorkItem) -> some View {
-        Button("Show Details") { inspectedItemID = item.uuid }
+        Button("Open in Window") { onOpenItem(item) }
 
         if let project = column.project {
             Menu("Move to") {
@@ -326,8 +356,42 @@ struct BoardColumnView: View {
         Divider()
 
         Button("Delete", role: .destructive) {
-            if inspectedItemID == item.uuid { inspectedItemID = nil }
+            if selectedItemID == item.uuid { selectedItemID = nil }
             withAnimation(.snappy) { context.delete(item) }
+        }
+    }
+
+    // MARK: - Clicks
+
+    /// A click selects at once and shows the popover a moment later; a
+    /// double-click opens the card's window instead.
+    ///
+    /// The popover is held back on purpose. Shown at once, it is on screen by
+    /// the second click of a double-click, and a click outside a transient
+    /// popover goes to closing it — so the double-click only ever toggled the
+    /// popover and never reached the card. Selection is immediate, so the card
+    /// still answers the first click.
+    private func click(_ item: WorkItem) {
+        focus.wrappedValue = .board
+        pendingPopover?.cancel()
+        // SwiftUI reports a tap per click; AppKit knows which click of a
+        // sequence this one is.
+        if (NSApp.currentEvent?.clickCount ?? 1) >= 2 {
+            popoverItemID = nil
+            onOpenItem(item)
+            return
+        }
+        let wasShowing = popoverItemID == item.uuid
+        selectedItemID = item.uuid
+        if wasShowing {
+            popoverItemID = nil
+            return
+        }
+        let delay = min(NSEvent.doubleClickInterval, 0.3)
+        pendingPopover = Task {
+            try? await Task.sleep(for: .seconds(delay))
+            guard !Task.isCancelled else { return }
+            popoverItemID = item.uuid
         }
     }
 

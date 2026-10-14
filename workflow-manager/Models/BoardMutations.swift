@@ -71,6 +71,19 @@ enum BoardMutations {
             context.insert(subCopy)
             subCopy.item = copy
         }
+        // The copy gets its own images: sharing the originals would leave its
+        // notes pointing at nothing the moment the original is deleted.
+        var repointed: [UUID: UUID] = [:]
+        for attachment in item.attachments where !attachment.isDeleted {
+            let image = CardAttachment(
+                filename: attachment.filename, contentType: attachment.contentType, data: attachment.data,
+                pixelWidth: attachment.pixelWidth, pixelHeight: attachment.pixelHeight
+            )
+            context.insert(image)
+            image.item = copy
+            repointed[attachment.uuid] = image.uuid
+        }
+        copy.details = AttachmentReferences.repointing(item.details, repointed)
         let index = column.orderedItems.firstIndex { $0.uuid == item.uuid }
         move(copy, to: column, insertingAt: (index ?? column.orderedItems.count - 1) + 1)
     }

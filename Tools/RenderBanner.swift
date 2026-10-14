@@ -296,7 +296,7 @@ draw("issues included — with Claude Code working the cards.", ctx,
 // The three things a reader wants to know before clicking Download, in the
 // order they would ask: what it needs, what it is, what it costs them.
 
-let chips = ["macOS 26.5+", "Apple Silicon", "SwiftUI · SwiftData"]
+let chips = ["macOS 14+", "Apple Silicon & Intel", "SwiftUI · SwiftData"]
 var chipX = textX
 let chipFont = font(34, .medium)
 

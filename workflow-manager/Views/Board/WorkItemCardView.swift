@@ -203,7 +203,7 @@ struct WorkItemCardView: View {
 
     private var hasFooter: Bool {
         item.dueDate != nil || !item.subtasks.isEmpty || !item.owner.isEmpty
-            || item.isBlocked || showsBranchInFooter
+            || item.isBlocked || showsBranchInFooter || imageCount > 0
     }
 
     private var footer: some View {
@@ -230,6 +230,10 @@ struct WorkItemCardView: View {
                     tint: .secondary
                 )
             }
+            if imageCount > 0 {
+                chip(systemImage: "photo", text: "\(imageCount)", tint: .secondary)
+                    .help("\(imageCount) image\(imageCount == 1 ? "" : "s") in the notes")
+            }
             Spacer(minLength: 0)
             if !item.owner.isEmpty {
                 Text(item.owner.prefix(2).uppercased())
@@ -240,6 +244,11 @@ struct WorkItemCardView: View {
                     .help(item.owner)
             }
         }
+    }
+
+    /// Images the notes show — not stored ones whose reference was deleted.
+    private var imageCount: Int {
+        item.attachments.isEmpty ? 0 : AttachmentReferences.ids(in: item.details).count
     }
 
     private var dueTint: Color {

@@ -76,6 +76,10 @@ final class WorkItem {
     @Relationship(deleteRule: .cascade, inverse: \Subtask.item)
     var subtasks: [Subtask] = []
 
+    /// Images pasted into the notes, which refer to them by UUID.
+    @Relationship(deleteRule: .cascade, inverse: \CardAttachment.item)
+    var attachments: [CardAttachment] = []
+
     // MARK: - Dependencies
     //
     // A card can depend on other cards ("blocked by"). Local only — deliberately

@@ -12,8 +12,10 @@ struct ProjectItemsTable: View {
     @Environment(\.modelContext) private var context
 
     @Bindable var project: Project
-    @Binding var inspectedItemID: UUID?
+    @Binding var selectedItemID: UUID?
     let filter: BoardFilter
+    /// Double-click or Return: the card's window.
+    var onOpen: (WorkItem) -> Void = { _ in }
 
     @State private var sortOrder = [KeyPathComparator(\WorkItemRow.dueSortKey)]
 
@@ -63,11 +65,11 @@ struct ProjectItemsTable: View {
                 }
                 .contextMenu(forSelectionType: UUID.self) { ids in
                     if let id = ids.first {
-                        Button("Edit Details") { inspectedItemID = id }
+                        Button("Open in Window") { open(id) }
                         Button("Delete", role: .destructive) { delete(ids) }
                     }
                 } primaryAction: { ids in
-                    inspectedItemID = ids.first
+                    ids.first.map(open)
                 }
             }
         }
@@ -76,15 +78,20 @@ struct ProjectItemsTable: View {
 
     private var selectionBinding: Binding<Set<UUID>> {
         Binding(
-            get: { inspectedItemID.map { [$0] } ?? [] },
-            set: { inspectedItemID = $0.first }
+            get: { selectedItemID.map { [$0] } ?? [] },
+            set: { selectedItemID = $0.first }
         )
+    }
+
+    private func open(_ id: UUID) {
+        guard let item = WorkItem.fetch(id, in: context) else { return }
+        onOpen(item)
     }
 
     private func delete(_ ids: Set<UUID>) {
         for id in ids {
             guard let item = WorkItem.fetch(id, in: context) else { continue }
-            if inspectedItemID == id { inspectedItemID = nil }
+            if selectedItemID == id { selectedItemID = nil }
             context.delete(item)
         }
     }
@@ -139,7 +146,7 @@ struct WorkItemRow: Identifiable {
 #Preview {
     @Previewable @State var inspected: UUID?
     if let project = SampleData.firstProject {
-        ProjectItemsTable(project: project, inspectedItemID: $inspected, filter: BoardFilter())
+        ProjectItemsTable(project: project, selectedItemID: $inspected, filter: BoardFilter())
             .modelContainer(SampleData.container)
             .frame(width: 900, height: 500)
     }

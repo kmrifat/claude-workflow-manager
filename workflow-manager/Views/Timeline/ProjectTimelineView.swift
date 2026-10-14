@@ -13,8 +13,10 @@ struct ProjectTimelineView: View {
     @Environment(\.modelContext) private var context
 
     @Bindable var project: Project
-    @Binding var inspectedItemID: UUID?
+    @Binding var selectedItemID: UUID?
     let filter: BoardFilter
+    /// Double-click: the card's window.
+    var onOpen: (WorkItem) -> Void = { _ in }
 
     private static let rowHeight: CGFloat = 30
     private static let labelWidth: CGFloat = 200
@@ -124,7 +126,7 @@ struct ProjectTimelineView: View {
     private func row(for item: WorkItem) -> some View {
         HStack(spacing: 0) {
             Button {
-                inspectedItemID = (inspectedItemID == item.uuid) ? nil : item.uuid
+                selectedItemID = (selectedItemID == item.uuid) ? nil : item.uuid
             } label: {
                 HStack(spacing: 6) {
                     Circle()
@@ -157,7 +159,7 @@ struct ProjectTimelineView: View {
                         .frame(width: width, height: 14)
                         .offset(x: startFraction * geometry.size.width)
                         .overlay(alignment: .leading) {
-                            if inspectedItemID == item.uuid {
+                            if selectedItemID == item.uuid {
                                 Capsule()
                                     .strokeBorder(.primary, lineWidth: 1.5)
                                     .frame(width: width, height: 14)
@@ -170,6 +172,7 @@ struct ProjectTimelineView: View {
             .frame(height: Self.rowHeight)
         }
         .frame(height: Self.rowHeight)
+        .simultaneousGesture(TapGesture(count: 2).onEnded { onOpen(item) })
     }
 
     private func barTint(for item: WorkItem) -> Color {
@@ -194,7 +197,7 @@ struct ProjectTimelineView: View {
             HStack(spacing: 6) {
                 ForEach(unscheduledItems.prefix(12), id: \.uuid) { item in
                     Button {
-                        inspectedItemID = item.uuid
+                        onOpen(item)
                     } label: {
                         Text(item.title.isEmpty ? "Untitled" : item.title)
                             .font(.caption)
@@ -225,7 +228,7 @@ private extension WorkItem {
 #Preview {
     @Previewable @State var inspected: UUID?
     if let project = SampleData.firstProject {
-        ProjectTimelineView(project: project, inspectedItemID: $inspected, filter: BoardFilter())
+        ProjectTimelineView(project: project, selectedItemID: $inspected, filter: BoardFilter())
             .modelContainer(SampleData.container)
             .frame(width: 1000, height: 600)
     }

@@ -39,7 +39,7 @@ let package = Package(
     // Below the app's own floor on purpose: the phone ships to older iOS than
     // the Mac app requires of macOS, and nothing here needs a recent SDK.
     platforms: [
-        .macOS(.v15),
+        .macOS(.v14),
         .iOS(.v17),
     ],
     products: [

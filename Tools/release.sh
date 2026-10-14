@@ -92,6 +92,8 @@ xcodebuild archive \
     -destination 'generic/platform=macOS' \
     -archivePath "$ARCHIVE" \
     -derivedDataPath "$PWD/.xcbuild" \
+    ARCHS="arm64 x86_64" \
+    ONLY_ACTIVE_ARCH=NO \
     CODE_SIGN_STYLE=Automatic \
     DEVELOPMENT_TEAM="$TEAM_ID" \
     "CODE_SIGN_IDENTITY[sdk=macosx*]=Developer ID Application" \
@@ -131,6 +133,14 @@ xcodebuild -exportArchive \
     | grep -E '^(\*\*|error:)' || true
 
 [ -d "$APP" ] || die "Export failed — no app at $APP"
+
+# Universal, said explicitly above and checked here: Intel Macs from 2018 on are
+# supported (the deployment target is macOS 14 for them), and an arm64-only
+# build fails on one with nothing more helpful than "not supported on this Mac".
+say "Checking it runs on Intel and Apple Silicon"
+ARCHS_BUILT=$(lipo -archs "$APP/Contents/MacOS/$APP_NAME")
+[[ "$ARCHS_BUILT" == *x86_64* && "$ARCHS_BUILT" == *arm64* ]] \
+    || die "Expected a universal app, got: $ARCHS_BUILT"
 
 say "Verifying the signature"
 codesign --verify --deep --strict --verbose=2 "$APP"
