@@ -17,7 +17,7 @@ struct ContentView: View {
     /// UUID simply stops resolving.
     @State private var destination: AppDestination = .overview
     @State private var viewMode: BoardViewMode = .board
-    @State private var inspectedItemID: UUID?
+    @State private var selectedItemID: UUID?
     @State private var filter = BoardFilter()
     /// Which half of the window has the keyboard; see `FocusPane`.
     @FocusState private var focusedPane: FocusPane?
@@ -33,21 +33,23 @@ struct ContentView: View {
     /// configured it must not drop the connections.
     @State private var boardServer = BoardServer()
 
-    /// App-level, not per-project: a board that is not on screen still has to
-    /// reach `.taskboard/tasks.json`, and a phone can change one at any time.
-    @State private var syncCoordinator = WorkflowSyncCoordinator()
+    /// Owned by the app, not per-project: a board that is not on screen still
+    /// has to reach `.taskboard/tasks.json`, and a phone can change one at any
+    /// time. The card windows share it.
+    @Environment(WorkflowSyncCoordinator.self) private var syncCoordinator
 
     /// Held strongly: `BoardServer.handler` is weak, so nothing else keeps the
     /// service alive and the phone would connect to a server that answers
     /// nothing.
     @State private var boardService: BoardService?
 
-    /// App-level for the same reason as `boardServer`: the server must keep
-    /// answering while any project — or none — is on screen.
-    @State private var mcpServer = MCPServer()
+    /// Owned by the app: the server must keep answering while any project — or
+    /// none — is on screen, and the card windows ask whether it is on.
+    @Environment(MCPServer.self) private var mcpServer
     @State private var tailnet = TailnetAccess.shared
 
     @Environment(\.modelContext) private var context
+    @Environment(\.openWindow) private var openWindow
 
     private var selectedProject: Project? {
         guard let id = destination.projectID else { return nil }
@@ -82,11 +84,10 @@ struct ContentView: View {
             viewMode = mode
         }
         .onChange(of: destination) { _, _ in
-            // Overview and the queues open a card by setting both at once, so
-            // keep the card if it belongs to the project now on screen.
-            if let inspectedItemID,
-               selectedProject?.allItems.contains(where: { $0.uuid == inspectedItemID }) != true {
-                self.inspectedItemID = nil
+            // A selection only means something on the board it belongs to.
+            if let selectedItemID,
+               selectedProject?.allItems.contains(where: { $0.uuid == selectedItemID }) != true {
+                self.selectedItemID = nil
             }
             filter = BoardFilter()
         }
@@ -96,8 +97,6 @@ struct ContentView: View {
         .sheet(isPresented: $showsHelp) {
             HelpGuideView()
         }
-        .environment(syncCoordinator)
-        .environment(mcpServer)
         .environment(tailnet)
         .task {
             syncCoordinator.start(context: context)
@@ -152,7 +151,7 @@ struct ContentView: View {
                     project: selectedProject,
                     viewMode: $viewMode,
                     filter: $filter,
-                    inspectedItemID: $inspectedItemID,
+                    selectedItemID: $selectedItemID,
                     focus: $focusedPane
                 )
                 // Reset per-project view state when switching projects.
@@ -197,9 +196,15 @@ struct ContentView: View {
         if arguments.bool(forKey: "OpenSettings") {
             destination = .settings
         }
-        if let title = arguments.string(forKey: "InspectCard"),
+        // `-OpenCard <title>` opens that card's window; `-ShowCard <title>`
+        // selects it on the board with its popover showing (see `BoardView`).
+        if let title = arguments.string(forKey: "OpenCard"),
+           let item = projects.flatMap(\.allItems).first(where: { $0.title == title }) {
+            openWindow(id: CardWindow.sceneID, value: item.uuid)
+        }
+        if let title = arguments.string(forKey: "ShowCard"),
            let item = selectedProject?.allItems.first(where: { $0.title == title }) {
-            inspectedItemID = item.uuid
+            selectedItemID = item.uuid
         }
         #endif
     }
@@ -209,13 +214,10 @@ struct ContentView: View {
         viewMode = .board
     }
 
-    /// Lands on the card's board with the card open — from the Overview and
-    /// the queues, which list cards from every project.
+    /// From the Overview and the queues, which list cards from every project:
+    /// the card's own window, so the list stays where it is behind it.
     private func openCard(_ item: WorkItem) {
-        guard let project = item.project else { return }
-        inspectedItemID = item.uuid
-        destination = .project(project.uuid)
-        viewMode = .board
+        openWindow(id: CardWindow.sceneID, value: item.uuid)
     }
 }
 

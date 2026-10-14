@@ -17,10 +17,12 @@ struct BoardColumnView: View {
     @Environment(\.modelContext) private var context
 
     @Bindable var column: BoardColumn
-    @Binding var inspectedItemID: UUID?
+    @Binding var selectedItemID: UUID?
     let filter: BoardFilter
     let accent: Color
     var focus: FocusState<FocusPane?>.Binding
+    @Binding var popoverItemID: UUID?
+    var onOpenItem: (WorkItem) -> Void
 
     @State private var hoveredCardID: UUID?
     @State private var dropsAfterHovered = false
@@ -86,10 +88,13 @@ struct BoardColumnView: View {
                 Spacer(minLength: 0)
 
                 Button {
+                    // A blank card in its own window, caret in the title. Closing
+                    // it untouched discards it.
                     let item = withAnimation(.snappy(duration: 0.2)) {
-                        BoardMutations.addItem(titled: "New item", to: column, in: context)
+                        BoardMutations.addItem(titled: "", to: column, in: context)
                     }
-                    inspectedItemID = item.uuid
+                    selectedItemID = item.uuid
+                    onOpenItem(item)
                 } label: {
                     Image(systemName: "plus")
                         .font(.system(size: 11, weight: .semibold))
@@ -217,7 +222,7 @@ struct BoardColumnView: View {
     private var cardList: some View {
         ScrollViewReader { proxy in
             cardScroller
-                .onChange(of: inspectedItemID) { _, id in
+                .onChange(of: selectedItemID) { _, id in
                     guard let id, column.orderedItems.contains(where: { $0.uuid == id }) else { return }
                     // A done card picked by keyboard past the first few is
                     // behind "Show more": open the list so it can be seen.
@@ -268,7 +273,7 @@ struct BoardColumnView: View {
     private func card(for item: WorkItem) -> some View {
         WorkItemCardView(
             item: item,
-            isSelected: inspectedItemID == item.uuid,
+            isSelected: selectedItemID == item.uuid,
             isDimmed: filter.isActive && !filter.matches(item),
             accent: accent,
             isCompact: column.isCompletionColumn
@@ -281,11 +286,30 @@ struct BoardColumnView: View {
                     .offset(y: dropsAfterHovered ? 5 : -5)
             }
         }
-        // Selects into the window's inspector (`CardInspector`); a second
-        // click on the selected card closes it.
+        // A click selects the card and shows its popover; a second click
+        // hides the popover and keeps the selection. A double-click opens the
+        // window — simultaneous, so the single click is not held back waiting
+        // to see whether a second one follows.
         .onTapGesture {
-            inspectedItemID = (inspectedItemID == item.uuid) ? nil : item.uuid
+            selectedItemID = item.uuid
+            popoverItemID = popoverItemID == item.uuid ? nil : item.uuid
             focus.wrappedValue = .board
+        }
+        .simultaneousGesture(TapGesture(count: 2).onEnded {
+            popoverItemID = nil
+            onOpenItem(item)
+        })
+        .popover(
+            isPresented: Binding(
+                get: { popoverItemID == item.uuid },
+                set: { if !$0, popoverItemID == item.uuid { popoverItemID = nil } }
+            ),
+            arrowEdge: .trailing
+        ) {
+            CardPopover(item: item) {
+                popoverItemID = nil
+                onOpenItem(item)
+            }
         }
         .draggable(WorkItemTransfer(itemID: item.uuid, sourceColumnID: column.uuid)) {
             WorkItemCardView(item: item, accent: accent, isCompact: column.isCompletionColumn)
@@ -312,7 +336,7 @@ struct BoardColumnView: View {
 
     @ViewBuilder
     private func cardMenu(for item: WorkItem) -> some View {
-        Button("Show Details") { inspectedItemID = item.uuid }
+        Button("Open in Window") { onOpenItem(item) }
 
         if let project = column.project {
             Menu("Move to") {
@@ -342,7 +366,7 @@ struct BoardColumnView: View {
         Divider()
 
         Button("Delete", role: .destructive) {
-            if inspectedItemID == item.uuid { inspectedItemID = nil }
+            if selectedItemID == item.uuid { selectedItemID = nil }
             withAnimation(.snappy) { context.delete(item) }
         }
     }

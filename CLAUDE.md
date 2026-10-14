@@ -228,24 +228,51 @@ on its own); rendering and inline styling live in `Views/GitHub/`. Inline code
 needs an explicit background: SwiftUI makes it monospaced and nothing else, which
 in a body full of paths reads as random font switches.
 
-**A local card's detail is the window's inspector column** (`CardInspector`,
-SwiftUI `.inspector`), shown by selecting a card on Board, List or Timeline. It
-replaced the card popover, which covered the cards around the one it described
-and could not stay open while you worked — and with Claude reporting progress
-on a card, that progress belongs in view. It is a glance plus quick actions:
-`WorkItemEditorSheet` stays the long-form editor, behind "Edit Details…", so
-there are not two full editors to keep in step. Notes typed in its composer
-become `CardEvent`s by "You", which `get_card` hands to the agent.
+**A local card has two views: a popover and its own window.** Design:
+`design/ClaudeWM.fig` › *Cards · Popover & Editor* (C01–C03).
 
-Sheets ("Create GitHub Issue…", "Link to Existing Issue…") are presented from
-the inspector directly. A sheet presented from inside a *popover* is torn down
-with it when focus moves; an inspector is part of the window, so that
-constraint is gone.
+- **`CardPopover`**, anchored to a card on the board: a glance — column,
+  notes preview, Claude's state, fields, subtasks — and **Open in Window**
+  (⌘O). It presents no sheets: a sheet presented from inside a popover is
+  torn down with it as focus moves, so issue linking and blockers live in the
+  window.
+- **`CardWindow`**, a `WindowGroup(for: UUID.self)` scene, so opening a card
+  that is already open brings its window forward. It replaced *both* the
+  inspector column and `WorkItemEditorSheet`: a sheet freezes the board behind
+  it and cannot be freely resized, and an inspector cannot show two cards side
+  by side. List and Timeline open it on double-click or Return; Overview and
+  the smart lists open it directly and stay where they are.
+- **It writes like Notes.** Date line, title as the first and largest line,
+  fields as chips (`CardFields`), then the notes. There is no Save, and a
+  window closed on a card nothing was put into (`WorkItem.isBlank`) deletes
+  it, as Notes drops an empty note — which is what makes "⇧⌘N opens a blank
+  card in a window" safe.
+- **The window needs the app's services**, so `WorkflowSyncCoordinator` and
+  `MCPServer` are owned by `ClaudeWMApp`, not `ContentView`, and injected into
+  both scenes. That also means a second main window no longer starts a second
+  MCP server on the same port.
 
-A GitHub issue still shows `GitHubIssueDetailSheet` as a popover
-(`presentation: .popover`, fixed size). A `.sheet` is neither freely resizable
-nor dismissable by clicking away, which is why its panel mode still exists and
-owns its own size.
+**Notes are Markdown styled in place, never converted** (`MarkdownTextView`,
+rules in `MarkdownStyler`). The markers stay in the string, faded; bullets and
+checkboxes are *drawn* over clear-coloured characters by
+`MarkdownLayoutManager`. The text is read by Claude over MCP, by `gh`, and by
+the phone, so it must stay Markdown — a rich-text format of our own would need
+converting at every one of those edges. Things to know:
+
+- **TextKit 1 on purpose.** `NSLayoutManager` is where glyph-level drawing
+  and line fragments live; the code panel and quote bar are built from them.
+- **The text view does not scroll; the page does.** It reports its height
+  through `sizeThatFits`, and its container width follows the frame by hand
+  (`setFrameSize`) — with `widthTracksTextView` the container kept whichever
+  width SwiftUI last *proposed*, and text wrapped short of the column.
+- **A fenced block's lines carry the attribute but the newlines between them
+  do not**, so the panel is joined from per-line runs in `drawBackground`.
+  Drawn per run, it came out striped.
+- **The checkbox markers are monospaced (and invisible)**, so `[x]` and `[ ]`
+  are the same width and ticking an item does not shift its text.
+- **Subtasks are not Markdown checklists.** They stay their own model — the
+  board counts them and `set_subtask` ticks them — and a `- [ ]` typed in the
+  notes stays text.
 
 ## The app's sidebar and Overview
 
@@ -278,8 +305,9 @@ event log. A card is "with Claude" when it was sent (`workflowRequested`) on a
 syncing project, and its column's status says how far the agent got.
 
 Debug builds accept `-UseSampleData`, which swaps in the in-memory
-`SampleData` store, plus `-OpenProject <name>`, `-ViewMode <mode>` and
-`-OpenQueue <queue>`. Use them to launch and screenshot a dev build — **never
+`SampleData` store, plus `-OpenProject <name>`, `-ViewMode <mode>`,
+`-OpenQueue <queue>`, `-OpenCard <title>` (its window) and `-ShowCard <title>`
+(its popover on the board). Use them to launch and screenshot a dev build — **never
 point a dev build at the real store**: the first launch migrates its groups.
 
 ## The app's MCP server

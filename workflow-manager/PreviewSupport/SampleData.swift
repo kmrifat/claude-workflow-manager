@@ -194,6 +194,37 @@ enum SampleData {
             working.workflowBranch = "issue-57"
             working.githubIssueNumber = 57
             working.githubRepoSlug = "acme/mobile-app"
+            working.agentName = "Claude"
+            working.agentClaimedAt = .now.addingTimeInterval(-6 * 60)
+            working.details = """
+            Two requests that both find an expired token both refresh it, and the \
+            second refresh revokes the first one's new token — so one request \
+            fails with a 401 at random.
+
+            ## What done looks like
+
+            - Only **one** refresh in flight; everyone else waits for it
+            - A failed refresh signs the user out *once*, not per request
+            - [x] Reproduce with two parallel requests
+            - [ ] Serialise refreshes behind an `actor`
+
+            ```swift
+            actor TokenRefresher {
+                private var inFlight: Task<Token, Error>?
+            }
+            ```
+
+            > The API revokes the old refresh token on use — see [the auth docs](https://example.com/auth).
+            """
+            let claimed = CardEvent(actor: "Claude", tool: "claim_card", summary: "Claimed the card", note: nil)
+            claimed.date = .now.addingTimeInterval(-6 * 60)
+            let progress = CardEvent(actor: "Claude", tool: "update_card",
+                                     summary: "Editing TokenRefresher.swift", note: nil)
+            progress.date = .now.addingTimeInterval(-4 * 60)
+            for event in [claimed, progress] {
+                context.insert(event)
+                event.item = working
+            }
         }
         if let queued = columns[safe: 1]?.orderedItems.first {
             queued.workflowRequested = true

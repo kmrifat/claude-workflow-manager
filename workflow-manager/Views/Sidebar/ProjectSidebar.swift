@@ -1357,8 +1357,9 @@ extension BoardViewMode {
 #endif
 
 /// Clears the text-field focus AppKit hands out when a window first becomes
-/// key, once. Later focus — ⌘⇧F, a click — is left alone.
-private struct InitialFocusResigner: NSViewRepresentable {
+/// key, once. Later focus — ⌘⇧F, a click — is left alone. The card window
+/// uses it too, so an existing card does not open with its title selected.
+struct InitialFocusResigner: NSViewRepresentable {
     func makeNSView(context: Context) -> NSView { ResignerView() }
     func updateNSView(_ nsView: NSView, context: Context) {}
 

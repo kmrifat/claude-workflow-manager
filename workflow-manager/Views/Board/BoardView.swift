@@ -2,11 +2,16 @@
 //  BoardView.swift
 //  workflow-manager
 //
+//  Clicking a card shows it in a popover anchored to it (`CardPopover`);
+//  double-clicking, or "Open in Window", opens it in its own window.
+//
 //  The keyboard works the board the way a pointer does: ←→↑↓ move the
-//  selection (and so the inspector), ⌘← ⌘→ carry the selected card to the next
-//  lane, ⌘↑ ⌘↓ reorder it, Return opens the full editor, Esc lets go, and ⇧Tab
-//  goes back to the sidebar. Moves go through `BoardMutations` like a drag,
-//  so ⌘Z undoes them. Where the arrows land is `BoardNavigation`'s job.
+//  selection — and the popover with it, if one is open — Space shows or hides
+//  the popover, as Space does Quick Look, Return opens the card's window, Esc
+//  closes the popover and then lets go, ⌘← ⌘→ carry the card to the next
+//  lane, ⌘↑ ⌘↓ reorder it, and ⇧Tab goes back to the sidebar. Moves go
+//  through `BoardMutations` like a drag, so ⌘Z undoes them. Where the arrows
+//  land is `BoardNavigation`'s job.
 //
 
 import SwiftUI
@@ -16,11 +21,15 @@ struct BoardView: View {
     @Environment(\.modelContext) private var context
 
     @Bindable var project: Project
-    @Binding var inspectedItemID: UUID?
+    @Binding var selectedItemID: UUID?
     let filter: BoardFilter
     var focus: FocusState<FocusPane?>.Binding
-    /// Return on a selected card: the full editor.
+    /// Return or a double-click on a card: its window.
     var onOpenItem: (WorkItem) -> Void = { _ in }
+
+    /// The card whose popover is showing. Separate from the selection: a card
+    /// stays selected after its popover closes, so ← → carry on from it.
+    @State private var popoverItemID: UUID?
 
     /// Fixed width is required: a `LazyHStack` inside a horizontal
     /// `ScrollView` cannot size its children to content.
@@ -33,7 +42,7 @@ struct BoardView: View {
     var body: some View {
         ScrollViewReader { proxy in
             board
-                .onChange(of: inspectedItemID) { _, id in
+                .onChange(of: selectedItemID) { _, id in
                     // Bring the lane into view; the lane scrolls to the card.
                     guard let id, let column = project.allItems.first(where: { $0.uuid == id })?.column else { return }
                     withAnimation(.snappy(duration: 0.2)) { proxy.scrollTo(column.uuid) }
@@ -43,6 +52,15 @@ struct BoardView: View {
         .focused(focus, equals: .board)
         .focusEffectDisabled()
         .onKeyPress(phases: [.down, .repeat], action: handleKey)
+        #if DEBUG
+        .task {
+            // `-ShowCard <title>`: that card's popover, for screenshots.
+            if UserDefaults.standard.string(forKey: "ShowCard") != nil, let selectedItemID {
+                try? await Task.sleep(for: .milliseconds(600))
+                popoverItemID = selectedItemID
+            }
+        }
+        #endif
     }
 
     private var board: some View {
@@ -51,10 +69,12 @@ struct BoardView: View {
                 ForEach(project.orderedColumns, id: \.uuid) { column in
                     BoardColumnView(
                         column: column,
-                        inspectedItemID: $inspectedItemID,
+                        selectedItemID: $selectedItemID,
                         filter: filter,
                         accent: project.accent.color,
-                        focus: focus
+                        focus: focus,
+                        popoverItemID: $popoverItemID,
+                        onOpenItem: onOpenItem
                     )
                     .frame(width: Self.columnWidth)
                     .id(column.uuid)
@@ -106,14 +126,14 @@ struct BoardView: View {
 
         let lanes = lanes
         let ids = lanes.map { $0.map(\.uuid) }
-        let position = BoardNavigation.locate(inspectedItemID, in: ids)
+        let position = BoardNavigation.locate(selectedItemID, in: ids)
         let command = press.modifiers.contains(.command)
 
         switch press.key {
         case .upArrow, .downArrow, .leftArrow, .rightArrow:
             guard let position else {
                 // Nothing selected yet: any arrow starts at the first card.
-                inspectedItemID = BoardNavigation.first(in: ids)
+                selectedItemID = BoardNavigation.first(in: ids)
                 return .handled
             }
             let vertical = press.key == .upArrow || press.key == .downArrow
@@ -126,14 +146,26 @@ struct BoardView: View {
             } else if let next = vertical
                         ? BoardNavigation.vertical(from: position, by: delta, in: ids)
                         : BoardNavigation.horizontal(from: position, by: delta, in: ids) {
-                inspectedItemID = next
+                selectedItemID = next
+                // An open popover follows the selection, as Quick Look does.
+                if popoverItemID != nil { popoverItemID = next }
             }
+        case .space:
+            guard let id = selectedItemID ?? BoardNavigation.first(in: ids) else { return .ignored }
+            selectedItemID = id
+            popoverItemID = popoverItemID == id ? nil : id
         case .return:
             guard let position else { return .ignored }
+            popoverItemID = nil
             onOpenItem(lanes[position.lane][position.row])
         case .escape:
-            guard inspectedItemID != nil else { return .ignored }
-            inspectedItemID = nil
+            if popoverItemID != nil {
+                popoverItemID = nil
+            } else if selectedItemID != nil {
+                selectedItemID = nil
+            } else {
+                return .ignored
+            }
         default:
             return .ignored
         }
@@ -221,7 +253,7 @@ struct BoardView: View {
     @Previewable @State var inspected: UUID?
     @Previewable @FocusState var focus: FocusPane?
     if let project = SampleData.firstProject {
-        BoardView(project: project, inspectedItemID: $inspected, filter: BoardFilter(), focus: $focus)
+        BoardView(project: project, selectedItemID: $inspected, filter: BoardFilter(), focus: $focus)
             .modelContainer(SampleData.container)
             .frame(width: 1100, height: 620)
     }

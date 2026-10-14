@@ -68,16 +68,25 @@ struct HelpGuideView: View {
 
     ## Cards
 
-    Click a card to show it in the inspector on the right — retitle, move it,
-    tick subtasks, leave Claude a note. Press **Edit Details** for the full
-    editor.
+    Click a card on the board for a quick look — where it is, what Claude is
+    doing with it, its subtasks. **Open in Window** (or double-click the card)
+    opens it in its own window, where you write it like a note: the title on
+    the first line, the fields as chips under it, then the notes.
 
-    ### The editor
+    A new card (**⇧⌘N**, or **+** on a column) opens straight into a window
+    with the cursor in the title. It saves as you type; close it empty and it
+    is discarded.
 
-    - **Notes** support Markdown, with a **Write / Preview** toggle. The preview
-      is the same renderer used for issue bodies and card popovers.
-    - Set priority, owner, dates, tags, and a checklist of subtasks.
-    - Link the card to a GitHub issue.
+    ### Writing notes
+
+    Notes are Markdown, styled as you type: `#` makes a heading, `-` a bulleted
+    list, `- [ ]` a checklist you can tick by clicking, ``` ``` ``` a code
+    block. **⌘B** bold, **⌘I** italic, **⌘K** link, **⇧⌘L** checklist, and
+    Return carries a list on. They stay plain Markdown, so Claude and GitHub
+    read them as written.
+
+    Subtasks are a separate list under the notes — the ones the board counts
+    and Claude can tick.
 
     ## Keyboard
 
@@ -93,10 +102,12 @@ struct HelpGuideView: View {
 
     On the board:
 
-    - **← → ↑ ↓** move between cards; the inspector follows.
+    - **← → ↑ ↓** move between cards. **Space** shows the card's popover, as
+      Space does Quick Look; it follows the arrows while it is open.
     - **⌘← ⌘→** move the card to the next column, **⌘↑ ⌘↓** reorder it. ⌘Z
       undoes either.
-    - **Return** opens the full editor, **Esc** deselects, **⌘⌫** deletes.
+    - **Return** opens the card's window, **Esc** closes the popover, then
+      deselects. **⌘⌫** deletes.
 
     ## Dependencies
 
