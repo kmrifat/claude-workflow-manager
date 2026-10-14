@@ -88,6 +88,9 @@ final class BoardConnection {
     /// The Mac told us its tunnel address in `welcome`. The owner of the
     /// pairing stores it, so the next dial from away uses the current one.
     var onRelayAddress: ((String) -> Void)?
+    /// The Mac's name, from `welcome`, so a pairing made under an older name
+    /// shows the current one.
+    var onServerName: ((String) -> Void)?
     private(set) var selectedProjectID: String?
 
     /// Mutations sent and not yet acked, by request id.
@@ -288,6 +291,7 @@ final class BoardConnection {
         case .welcome(let serverName, let relayURL):
             state = .connected(serverName: serverName)
             if let relayURL { onRelayAddress?(relayURL) }
+            if !serverName.isEmpty { onServerName?(serverName) }
             // Sets the delegate and asks for permission now that there is a Mac
             // on the other end — see `PhoneNotifier.prepare()`.
             PhoneNotifier.shared.prepare()

@@ -106,6 +106,15 @@ struct ContentView: View {
             mcpServer.tools.didMutate = { syncCoordinator.boardChanged($0) }
             mcpServer.attach(context: context)
 
+            // Phone Access comes back on if it was left on — a phone paired to
+            // this Mac should not stop working because Pitwall restarted. Not
+            // in a sample-data build, which shares this Mac's settings and
+            // would otherwise answer the phone in the real app's place.
+            if BoardServer.isWanted, BoardPairing.loadKey() != nil, !boardServer.state.isRunning,
+               !CommandLine.arguments.contains("-UseSampleData") {
+                boardServer.startPhoneAccess(tailnet: tailnet.phoneNode)
+            }
+
             tailnet.onChange = { applyRemote() }
             CloudflareTunnel.shared.onChange = { applyRemote() }
             tailnet.startMonitoring()

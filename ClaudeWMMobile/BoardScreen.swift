@@ -24,12 +24,18 @@ struct BoardScreen: View {
     var body: some View {
         NavigationStack {
             content
-                .navigationTitle(connection.snapshot?.project.name ?? paired?.macName ?? "Pitwall")
+                .navigationTitle(connection.snapshot?.project.name ?? paired?.displayName ?? "Pitwall")
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar { toolbar }
                 .safeAreaInset(edge: .top, spacing: 0) { statusBar }
         }
         .task(id: paired?.service) {
+            connection.onServerName = { name in
+                guard var updated = paired, updated.macName != name else { return }
+                updated.macName = name
+                PairedMacStore.save(updated)
+                paired = updated
+            }
             connection.onRelayAddress = { address in
                 // A quick tunnel's address changes when the Mac restarts; the
                 // Mac says the current one on every connect.
@@ -89,7 +95,7 @@ struct BoardScreen: View {
             // connection" would be useless here: the usual answer is that the
             // Mac is asleep.
             Text("""
-                Make sure \(paired?.macName ?? "your Mac") is awake and has Phone Access \
+                Make sure \(paired?.displayName ?? "your Mac") is awake and has Phone Access \
                 turned on — and, away from this Wi-Fi, that it has Access from Anywhere on.
                 """)
         } actions: {
@@ -112,7 +118,7 @@ struct BoardScreen: View {
         } else if case .disconnected = connection.state {
             HStack(spacing: 6) {
                 ProgressView().controlSize(.mini)
-                Text("Reconnecting to \(paired?.macName ?? "your Mac")…").font(.footnote)
+                Text("Reconnecting to \(paired?.displayName ?? "your Mac")…").font(.footnote)
                 Spacer()
             }
             .padding(.horizontal, 12).padding(.vertical, 8)

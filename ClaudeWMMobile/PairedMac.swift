@@ -23,6 +23,16 @@ struct PairedMac: Equatable {
     /// The Mac's Cloudflare Tunnel address, if it offered one. Kept current by
     /// `welcome`, since a quick tunnel's address changes when the Mac restarts.
     var relayURL: String?
+
+    /// The Mac's name as a person reads it. Pairings made before the Mac sent
+    /// its plain name stored the Bonjour identifier, "Claude WM on …" — which
+    /// carries the app's old name — so that prefix is dropped here.
+    var displayName: String {
+        for prefix in ["Claude WM on ", "Pitwall on "] where macName.hasPrefix(prefix) {
+            return String(macName.dropFirst(prefix.count))
+        }
+        return macName
+    }
 }
 
 extension PairedMac {

@@ -451,8 +451,22 @@ final class BoardServer {
     /// finds its Mac by this exact Bonjour name (`BoardBrowser.endpoint(named:)`),
     /// so renaming it would silently unpair every phone.
     static var defaultServiceName: String {
-        let host = Host.current().localizedName ?? ProcessInfo.processInfo.hostName
-        return "Claude WM on \(host)"
+        "Claude WM on \(displayName)"
+    }
+
+    /// What a person reads: the Mac's own name. The Bonjour name above is an
+    /// identifier the phone matches on and is never shown — it still carries
+    /// the app's old name, which is not the app's name any more.
+    static var displayName: String {
+        Host.current().localizedName ?? ProcessInfo.processInfo.hostName
+    }
+
+    /// Whether Phone Access should be on, remembered across launches like the
+    /// MCP server's switch. Set only by the person — Turn On and Turn Off —
+    /// never by the restarts remote access does internally.
+    static var isWanted: Bool {
+        get { UserDefaults.standard.bool(forKey: "phoneAccessEnabled") }
+        set { UserDefaults.standard.set(newValue, forKey: "phoneAccessEnabled") }
     }
 
     /// Shared with the client so both ends build an identical stack.
@@ -485,7 +499,7 @@ extension BoardServer {
         return try? BoardPairing.url(for: BoardPairing.Payload(
             key: BoardPairing.currentKey(),
             service: name,
-            mac: name,
+            mac: Self.displayName,
             host: node?.preferredHost,
             port: node == nil ? nil : TailnetAccess.phonePort,
             relay: relay?.absoluteString
