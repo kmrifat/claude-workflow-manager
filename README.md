@@ -106,9 +106,11 @@ claim and update your cards as tools.
 
 **6. Use it from your phone**, if you want to. **Phone Access…** starts a
 server on your network and shows a QR code; the iOS client pairs by scanning it.
-With [Tailscale](https://tailscale.com) installed, **Settings ▸ Remote** makes
-the phone and the MCP server reachable away from home too — device to device,
-nothing of ours in between. The
+**Settings ▸ Remote** makes the phone and the MCP server reachable away from
+home too: over [Tailscale](https://tailscale.com), device to device, or through
+a Cloudflare Tunnel run by `cloudflared` on the Mac — a quick one with no
+account, or a hostname of your own. Through Cloudflare the phone's traffic is
+sealed with its pairing key end to end. The
 board, the terminal and the file browser are three separate switches, because
 showing somebody your board should not also hand them a shell.
 

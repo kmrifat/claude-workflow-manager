@@ -106,8 +106,19 @@ struct ContentView: View {
             mcpServer.tools.didMutate = { syncCoordinator.boardChanged($0) }
             mcpServer.attach(context: context)
 
-            tailnet.onChange = { applyTailnet() }
+            // Phone Access comes back on if it was left on — a phone paired to
+            // this Mac should not stop working because Pitwall restarted. Not
+            // in a sample-data build, which shares this Mac's settings and
+            // would otherwise answer the phone in the real app's place.
+            if BoardServer.isWanted, BoardPairing.loadKey() != nil, !boardServer.state.isRunning,
+               !CommandLine.arguments.contains("-UseSampleData") {
+                boardServer.startPhoneAccess(tailnet: tailnet.phoneNode)
+            }
+
+            tailnet.onChange = { applyRemote() }
+            CloudflareTunnel.shared.onChange = { applyRemote() }
             tailnet.startMonitoring()
+            applyRemote()
 
             let service = BoardService(context: context)
             service.didMutate = { syncCoordinator.boardChanged($0) }
@@ -131,6 +142,10 @@ struct ContentView: View {
         .onReceive(NotificationCenter.default.publisher(for: .phoneAccessRequested)) { _ in
             showsPhoneAccess = true
         }
+        // Phone Access and the MCP server are started and stopped elsewhere —
+        // the sharing sheet, Settings — and the tunnel has to follow.
+        .onChange(of: boardServer.state) { _, _ in applyRemote() }
+        .onChange(of: mcpServer.isEnabled) { _, _ in applyRemote() }
         .sheet(isPresented: $showsPhoneAccess) {
             BoardSharingView(server: boardServer)
         }
@@ -169,11 +184,39 @@ struct ContentView: View {
     /// Puts each server where remote access says it should be. Phone Access
     /// has to restart to move between its LAN port and its fixed tailnet one;
     /// the MCP server only adds or drops its second listener.
-    private func applyTailnet() {
+    /// Makes what is listening match the Remote settings, for whichever route
+    /// is chosen. Called whenever any input changes — a switch, Tailscale's
+    /// state, the tunnel's address, a server starting or stopping — and safe to
+    /// call when nothing did.
+    private func applyRemote() {
+        // Tailscale: a second listener on the tailnet address.
         mcpServer.setRemote(tailnet.mcpNode)
         if boardServer.state.isRunning, !boardServer.matchesTailnet(tailnet.phoneNode) {
             boardServer.stop()
             boardServer.startPhoneAccess(tailnet: tailnet.phoneNode)
+        }
+
+        // Cloudflare: one tunnel to the gateway, which serves whichever of the
+        // two is switched on and running. Nothing runs for a server that is off.
+        let tunnel = CloudflareTunnel.shared
+        let carriesMCP = tailnet.usesCloudflare && tailnet.exposesMCP && mcpServer.isEnabled
+        let carriesPhone = tailnet.usesCloudflare && tailnet.exposesPhone && boardServer.state.isRunning
+        if carriesMCP || carriesPhone {
+            TunnelGateway.shared.start()
+            tunnel.start()
+        } else {
+            tunnel.stop()
+            TunnelGateway.shared.stop()
+        }
+
+        let address = tunnel.state.url
+        mcpServer.setTunnel(host: carriesMCP ? address?.host() : nil)
+        if carriesPhone {
+            boardServer.startRelay()
+            boardServer.relayURL = address?.absoluteString
+        } else {
+            boardServer.stopRelay()
+            boardServer.relayURL = nil
         }
     }
 

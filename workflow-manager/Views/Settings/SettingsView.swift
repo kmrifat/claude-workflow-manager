@@ -47,6 +47,12 @@ struct SettingsView: View {
     @State private var copied = false
     @State private var showsAllTools = false
     @State private var copiedRemote = false
+    @State private var copiedTunnel = false
+    @State private var copiedInstall = false
+    @State private var tunnel = CloudflareTunnel.shared
+    @State private var installCheck = 0
+    @State private var tokenDraft = ""
+    @State private var hostnameDraft = CloudflareTunnel.shared.hostname
 
     var body: some View {
         ScrollView {
@@ -345,6 +351,8 @@ struct SettingsView: View {
 
     // MARK: - Remote
 
+    private var usesCloudflare: Bool { tailnet.route == .cloudflare }
+
     @ViewBuilder
     private var remotePane: some View {
         hero(
@@ -357,7 +365,9 @@ struct SettingsView: View {
         }
         .task { await tailnet.refresh() }
 
-        Text("Off the Wi-Fi, your phone and your other Macs reach this one over your tailnet, device to device. Nothing of ours sits in between, and each service still asks for its own key — being on the tailnet is not enough to get in.")
+        Text(usesCloudflare
+             ? "Off the Wi-Fi, your phone and your other Macs reach this one through a Cloudflare Tunnel run by cloudflared on this Mac. Your phone's traffic is sealed with its pairing key, so Cloudflare only forwards it. Each service still asks for its own key."
+             : "Off the Wi-Fi, your phone and your other Macs reach this one over your tailnet, device to device. Nothing of ours sits in between, and each service still asks for its own key — being on the tailnet is not enough to get in.")
             .font(.system(size: 12))
             .foregroundStyle(.secondary)
             .fixedSize(horizontal: false, vertical: true)
@@ -368,32 +378,35 @@ struct SettingsView: View {
                     title: "Tailscale",
                     badges: tailscaleBadges,
                     text: "Your tailnet only, device to device. No server of ours, nothing in between.",
-                    isSelected: true
+                    isSelected: !usesCloudflare
                 )
+                .onTapGesture { tailnet.route = .tailscale }
                 routeCard(
                     title: "Cloudflare Tunnel",
-                    badges: [("Not built yet", false)],
-                    text: "A hostname you own through cloudflared. Planned, not available.",
-                    isSelected: false
+                    badges: cloudflareBadges,
+                    text: "Nothing to install on the phone. A quick tunnel needs no account; a hostname you own needs one on Cloudflare.",
+                    isSelected: usesCloudflare
                 )
-                .opacity(0.55)
+                .onTapGesture { tailnet.route = .cloudflare }
             }
         }
 
-        if tailnet.status == .notInstalled {
+        if usesCloudflare {
+            cloudflareSection
+        } else if tailnet.status == .notInstalled {
             installBanner
         }
 
-        SettingsSection(title: "Reachable over Tailscale") {
+        SettingsSection(title: usesCloudflare ? "Reachable through the tunnel" : "Reachable over Tailscale") {
             SettingsGroup {
                 GroupRow(title: "MCP server", subtitle: mcpReachSubtitle) {
-                    Toggle("MCP server over Tailscale", isOn: $tailnet.exposesMCP)
+                    Toggle("MCP server, away from home", isOn: $tailnet.exposesMCP)
                         .toggleStyle(.switch)
                         .labelsHidden()
                 }
                 GroupDivider()
                 GroupRow(title: "Phone Access", subtitle: phoneReachSubtitle) {
-                    Toggle("Phone Access over Tailscale", isOn: $tailnet.exposesPhone)
+                    Toggle("Phone Access, away from home", isOn: $tailnet.exposesPhone)
                         .toggleStyle(.switch)
                         .labelsHidden()
                 }
@@ -413,9 +426,14 @@ struct SettingsView: View {
             SettingsSection(title: "Connect from another Mac") {
                 SettingsGroup {
                     VStack(alignment: .leading, spacing: 8) {
-                        Text("Run on any Mac signed in to the same tailnet. It reaches this Mac’s boards over Tailscale.")
+                        Text(usesCloudflare
+                             ? (tunnel.mode == .quick
+                                ? "Run on the other Mac. A quick tunnel's address changes each time Pitwall starts, so run it again after a restart."
+                                : "Run on the other Mac. It reaches this Mac's boards through your tunnel.")
+                             : "Run on any Mac signed in to the same tailnet. It reaches this Mac’s boards over Tailscale.")
                             .font(.system(size: 12))
                             .foregroundStyle(.secondary)
+                            .fixedSize(horizontal: false, vertical: true)
                         commandWell(command, copied: $copiedRemote)
                     }
                     .padding(14)
@@ -423,7 +441,7 @@ struct SettingsView: View {
             }
         }
 
-        if let node = tailnet.phoneNode, boardServer.state.isRunning {
+        if let reason = rescanReason {
             HStack(alignment: .top, spacing: 12) {
                 Image(systemName: "qrcode")
                     .font(.system(size: 16))
@@ -431,7 +449,7 @@ struct SettingsView: View {
                 VStack(alignment: .leading, spacing: 2) {
                     Text("Scan the pairing code once more on each phone")
                         .font(.system(size: 13, weight: .medium))
-                    Text("The new code tells it to try \(node.preferredHost) when it is away from home. Phones also need the Tailscale app, signed in to this tailnet.")
+                    Text(reason)
                         .font(.system(size: 11))
                         .foregroundStyle(.secondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -447,20 +465,53 @@ struct SettingsView: View {
         }
     }
 
+    private var rescanReason: String? {
+        guard boardServer.state.isRunning else { return nil }
+        if usesCloudflare, let relay = boardServer.relayURL {
+            let host = URL(string: relay)?.host() ?? relay
+            return tunnel.mode == .quick
+                ? "The new code tells it to try \(host) when it is away from home. A quick tunnel's address changes when Pitwall restarts; a phone that connects at home learns the new one by itself."
+                : "The new code tells it to try \(host) when it is away from home. Nothing needs installing on the phone."
+        }
+        if let node = tailnet.phoneNode {
+            return "The new code tells it to try \(node.preferredHost) when it is away from home. Phones also need the Tailscale app, signed in to this tailnet."
+        }
+        return nil
+    }
+
     @ViewBuilder
     private var remoteStatus: some View {
-        switch tailnet.status {
-        case nil:
-            StatusLine(color: .secondary, text: "Checking Tailscale…")
-        case .notInstalled:
-            StatusLine(color: .secondary, text: "Tailscale isn’t installed on this Mac")
-        case .notConnected(let reason):
-            StatusLine(color: Theme.warning, text: reason)
-        case .connected(let node):
-            if tailnet.isEnabled {
-                StatusLine(color: Theme.running, text: "Reachable as \(node.preferredHost)" + (node.tailnet.map { " · \($0)" } ?? ""))
-            } else {
-                StatusLine(color: .secondary, text: "On your tailnet as \(node.preferredHost) · off")
+        if usesCloudflare {
+            switch tunnel.state {
+            case .running(let url):
+                StatusLine(color: Theme.running, text: "Reachable at \(url.host() ?? url.absoluteString)")
+            case .starting:
+                StatusLine(color: Theme.warning, text: "Starting the tunnel…")
+            case .notInstalled:
+                StatusLine(color: .secondary, text: "cloudflared isn’t installed on this Mac")
+            case .needsSetup:
+                StatusLine(color: Theme.warning, text: "Add your tunnel's token and hostname below")
+            case .failed(let message):
+                StatusLine(color: Theme.danger, text: message)
+            case .stopped:
+                StatusLine(color: .secondary, text: tailnet.isEnabled
+                           ? "Waiting for the MCP server or Phone Access to be on"
+                           : "Off")
+            }
+        } else {
+            switch tailnet.status {
+            case nil:
+                StatusLine(color: .secondary, text: "Checking Tailscale…")
+            case .notInstalled:
+                StatusLine(color: .secondary, text: "Tailscale isn’t installed on this Mac")
+            case .notConnected(let reason):
+                StatusLine(color: Theme.warning, text: reason)
+            case .connected(let node):
+                if tailnet.isEnabled {
+                    StatusLine(color: Theme.running, text: "Reachable as \(node.preferredHost)" + (node.tailnet.map { " · \($0)" } ?? ""))
+                } else {
+                    StatusLine(color: .secondary, text: "On your tailnet as \(node.preferredHost) · off")
+                }
             }
         }
     }
@@ -474,8 +525,132 @@ struct SettingsView: View {
         }
     }
 
+    private var cloudflareBadges: [(String, Bool)] {
+        guard tunnel.isInstalled else { return [("Not installed", false)] }
+        switch tunnel.state {
+        case .running: return [("Running", true)]
+        case .failed: return [("Failed", false)]
+        default: return [(tunnel.mode == .quick ? "Quick tunnel" : "Your domain", false)]
+        }
+    }
+
+    // MARK: Cloudflare
+
+    @ViewBuilder
+    private var cloudflareSection: some View {
+        let _ = installCheck
+        if !tunnel.isInstalled {
+            HStack(alignment: .top, spacing: 12) {
+                Image(systemName: "arrow.down.circle")
+                    .font(.system(size: 16))
+                    .foregroundStyle(Theme.link)
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("Install cloudflared to use a Cloudflare Tunnel")
+                        .font(.system(size: 13, weight: .medium))
+                    Text("Only on this Mac — the phone needs nothing. With Homebrew:")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                    commandWell("brew install cloudflared", copied: $copiedInstall)
+                }
+                Spacer(minLength: 8)
+                VStack(alignment: .trailing, spacing: 6) {
+                    Link("About cloudflared…", destination: URL(string: "https://developers.cloudflare.com/cloudflare-one/connections/connect-networks/downloads/")!)
+                    Button("Check Again") {
+                        // Redraws, so `isInstalled` is looked up again, and
+                        // re-applies the settings so a tunnel that is wanted
+                        // starts now that it can.
+                        installCheck += 1
+                        tailnet.onChange?()
+                    }
+                }
+            }
+            .padding(14)
+            .background(Theme.link.opacity(0.08), in: .rect(cornerRadius: 10))
+            .overlay { RoundedRectangle(cornerRadius: 10).strokeBorder(Theme.link.opacity(0.25)) }
+        }
+
+        SettingsSection(title: "Tunnel") {
+            SettingsGroup {
+                GroupRow(title: "Address", subtitle: tunnel.mode == .quick
+                         ? "A new trycloudflare.com address each time Pitwall starts, which can take a minute or two to start working. No account. Cloudflare offers quick tunnels for testing, without an uptime promise."
+                         : "A hostname you own, through a tunnel you create in Cloudflare's dashboard.") {
+                    Picker("Address", selection: $tunnel.mode) {
+                        Text("Quick tunnel").tag(CloudflareTunnel.Mode.quick)
+                        Text("Your domain").tag(CloudflareTunnel.Mode.named)
+                    }
+                    .pickerStyle(.segmented)
+                    .labelsHidden()
+                    .fixedSize()
+                }
+                if tunnel.mode == .named {
+                    GroupDivider()
+                    GroupRow(title: "Hostname", subtitle: "The public hostname you added to the tunnel.") {
+                        TextField("pitwall.example.com", text: $hostnameDraft)
+                            .textFieldStyle(.roundedBorder)
+                            .frame(width: 220)
+                            .onSubmit { tunnel.hostname = hostnameDraft }
+                        Button("Save") { tunnel.hostname = hostnameDraft }
+                            .disabled(CloudflareTunnel.clean(hostnameDraft) == tunnel.hostname)
+                    }
+                    GroupDivider()
+                    GroupRow(title: "Tunnel token", subtitle: tunnel.hasToken
+                             ? "Saved in the Keychain. Pitwall hands it to cloudflared and nothing else."
+                             : "Paste the token, or the whole install command the dashboard shows.") {
+                        if tunnel.hasToken {
+                            Button("Remove", role: .destructive) { tunnel.clearToken() }
+                        } else {
+                            SecureField("eyJhIjoi…", text: $tokenDraft)
+                                .textFieldStyle(.roundedBorder)
+                                .frame(width: 220)
+                                .onSubmit(saveToken)
+                            Button("Save", action: saveToken)
+                                .disabled(tokenDraft.trimmingCharacters(in: .whitespaces).isEmpty)
+                        }
+                    }
+                }
+                if let url = tunnel.state.url {
+                    GroupDivider()
+                    GroupRow(title: "Running at", subtitle: url.absoluteString) {
+                        Button(copiedTunnel ? "Copied" : "Copy") {
+                            NSPasteboard.general.clearContents()
+                            NSPasteboard.general.setString(url.absoluteString, forType: .string)
+                            copiedTunnel = true
+                            Task {
+                                try? await Task.sleep(for: .seconds(2))
+                                copiedTunnel = false
+                            }
+                        }
+                        .controlSize(.small)
+                    }
+                }
+            }
+        }
+
+        if tunnel.mode == .named {
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Setting up your domain, once")
+                    .font(.system(size: 12, weight: .semibold))
+                Text("1. In Cloudflare's dashboard, open Zero Trust › Networks › Tunnels and create a Cloudflared tunnel.\n2. Copy its token — the long string at the end of the install command — and paste it above.\n3. Add a public hostname, such as pitwall.example.com, with the service set to HTTP and localhost:\(String(TunnelGateway.port)). Enter the same hostname above.\nPitwall only runs the tunnel. It creates nothing in your Cloudflare account.")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Link("Open the Cloudflare dashboard…", destination: URL(string: "https://one.dash.cloudflare.com/")!)
+                    .font(.system(size: 11))
+                    .padding(.top, 2)
+            }
+        }
+    }
+
+    private func saveToken() {
+        tunnel.setToken(tokenDraft)
+        tokenDraft = ""
+    }
+
     private var mcpReachSubtitle: String {
         guard server.isEnabled else { return "Turn the MCP server on in Claude & MCP first." }
+        if usesCloudflare {
+            return "Claude Code on another Mac can work these boards, with the token. Cloudflare decrypts this traffic at its edge, so it can read the board data and the token."
+        }
         switch server.remoteState {
         case .running: return "Claude Code on another Mac can work these boards. Still needs the token."
         case .failed(let message): return message
@@ -485,6 +660,9 @@ struct SettingsView: View {
 
     private var phoneReachSubtitle: String {
         guard boardServer.state.isRunning else { return "Start Phone Access in Devices first." }
+        if usesCloudflare {
+            return "Sealed end to end with the pairing key — Cloudflare forwards it but cannot read it."
+        }
         return tailnet.phoneNode == nil
             ? "Your phone reaches this Mac off the Wi-Fi, with its pairing key."
             : "Listening on port \(TailnetAccess.phonePort) for your phone, with its pairing key."
@@ -520,6 +698,9 @@ struct SettingsView: View {
             RoundedRectangle(cornerRadius: 10)
                 .strokeBorder(isSelected ? Color.accentColor : Theme.groupStroke, lineWidth: isSelected ? 2 : 1)
         }
+        .contentShape(.rect(cornerRadius: 10))
+        .accessibilityAddTraits(.isButton)
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 
     private var installBanner: some View {

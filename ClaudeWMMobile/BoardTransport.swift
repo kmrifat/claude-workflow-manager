@@ -58,6 +58,29 @@ enum BoardTransport {
         return parameters
     }
 
+    /// Through a Cloudflare Tunnel: ordinary TLS to Cloudflare's edge, which
+    /// holds a real certificate, and a WebSocket inside it. The pairing key is
+    /// not in these parameters — it seals each message instead
+    /// (`SealedChannel`), because Cloudflare ends TLS before the Mac does.
+    static func relayParameters() -> NWParameters {
+        let parameters = NWParameters(tls: NWProtocolTLS.Options())
+        let websocket = NWProtocolWebSocket.Options()
+        websocket.autoReplyPing = true
+        parameters.defaultProtocolStack.applicationProtocols.insert(websocket, at: 0)
+        return parameters
+    }
+
+    /// `wss://<tunnel host>/board` for a tunnel address like
+    /// `https://pitwall.example.com`. `/board` is what the Mac's gateway
+    /// routes to Phone Access.
+    static func relayEndpoint(_ address: String) -> NWEndpoint? {
+        guard var components = URLComponents(string: address), components.host != nil else { return nil }
+        components.scheme = "wss"
+        components.path = "/board"
+        components.query = nil
+        return components.url.map { NWEndpoint.url($0) }
+    }
+
     /// `wss://host:port/` — a URL, never host+port: the WebSocket upgrade
     /// needs a path and a `Host` header, and dialling host+port completes TLS
     /// and then aborts with POSIX 53 (see `BoardServer.clientParameters`).
@@ -85,6 +108,8 @@ enum BoardPairingCode {
         /// access on. Where to dial when Bonjour cannot see the Mac.
         var host: String?
         var port: UInt16?
+        /// The Mac's Cloudflare Tunnel address, when it offers that route.
+        var relay: String?
     }
 
     static let keyByteCount = 32

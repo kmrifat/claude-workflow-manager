@@ -126,7 +126,8 @@ struct BoardSharingView: View {
             // Built live rather than kept from `start()`: reopening this sheet
             // while serving, or remote access changing, must show the code that
             // is true now.
-            if let pairingURL = server.pairingURL(tailnet: TailnetAccess.shared.phoneNode),
+            if let pairingURL = server.pairingURL(tailnet: TailnetAccess.shared.phoneNode,
+                                                  relay: server.relayURL.flatMap(URL.init(string:))),
                let image = BoardPairing.qrCode(for: pairingURL) {
                 HStack {
                     Spacer()
@@ -322,7 +323,10 @@ struct BoardSharingView: View {
     private var footer: some View {
         HStack {
             if server.state.isRunning {
-                Button("Turn Off") { server.stop() }
+                Button("Turn Off") {
+                    BoardServer.isWanted = false
+                    server.stop()
+                }
             } else {
                 Button("Turn On") { start() }
                     .buttonStyle(.borderedProminent)
@@ -347,6 +351,7 @@ struct BoardSharingView: View {
     // MARK: - Actions
 
     private func start() {
+        BoardServer.isWanted = true
         server.startPhoneAccess(tailnet: TailnetAccess.shared.phoneNode)
     }
 

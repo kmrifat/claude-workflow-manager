@@ -82,7 +82,12 @@ public enum ClientMessage: Sendable, Equatable {
 // MARK: - Mac to phone
 
 public enum ServerMessage: Sendable, Equatable {
-    case welcome(serverName: String)
+    /// `relayURL` is where the Mac can be reached through its Cloudflare
+    /// Tunnel right now, if it has one. A quick tunnel's address changes every
+    /// time it starts, so a phone that connects at home learns the new one
+    /// here rather than having to scan a new code. Optional, so an older phone
+    /// simply ignores it.
+    case welcome(serverName: String, relayURL: String? = nil)
     case projects([WireProjectRef])
     case snapshot(BoardSnapshot)
     /// The board moved. Carries the new revision only — the phone decides
@@ -243,6 +248,7 @@ private enum MessageKeys: String, CodingKey {
     case deviceID
     case sessionID, data, action, replay, terminal, terminals
     case path, entries, content
+    case relayURL
 }
 
 extension ClientMessage: Codable {
@@ -367,8 +373,9 @@ extension ServerMessage: Codable {
         var container = encoder.container(keyedBy: MessageKeys.self)
         try container.encode(type, forKey: .type)
         switch self {
-        case .welcome(let serverName):
+        case .welcome(let serverName, let relayURL):
             try container.encode(serverName, forKey: .serverName)
+            try container.encodeIfPresent(relayURL, forKey: .relayURL)
         case .projects(let projects):
             try container.encode(projects, forKey: .projects)
         case .snapshot(let snapshot):
@@ -412,7 +419,10 @@ extension ServerMessage: Codable {
         let type = try container.decode(String.self, forKey: .type)
         switch type {
         case "welcome":
-            self = .welcome(serverName: (try? container.decode(String.self, forKey: .serverName)) ?? "")
+            self = .welcome(
+                serverName: (try? container.decode(String.self, forKey: .serverName)) ?? "",
+                relayURL: try? container.decode(String.self, forKey: .relayURL)
+            )
             return
         case "projects":
             self = .projects((try? container.decode([WireProjectRef].self, forKey: .projects)) ?? [])

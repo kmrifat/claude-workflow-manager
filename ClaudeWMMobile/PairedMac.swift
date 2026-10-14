@@ -20,6 +20,19 @@ struct PairedMac: Equatable {
     /// The Mac's tailnet name and port, if it offered them when paired.
     var remoteHost: String?
     var remotePort: UInt16?
+    /// The Mac's Cloudflare Tunnel address, if it offered one. Kept current by
+    /// `welcome`, since a quick tunnel's address changes when the Mac restarts.
+    var relayURL: String?
+
+    /// The Mac's name as a person reads it. Pairings made before the Mac sent
+    /// its plain name stored the Bonjour identifier, "Claude WM on …" — which
+    /// carries the app's old name — so that prefix is dropped here.
+    var displayName: String {
+        for prefix in ["Claude WM on ", "Pitwall on "] where macName.hasPrefix(prefix) {
+            return String(macName.dropFirst(prefix.count))
+        }
+        return macName
+    }
 }
 
 extension PairedMac {
@@ -31,7 +44,8 @@ extension PairedMac {
             service: payload.service,
             macName: payload.mac,
             remoteHost: payload.host,
-            remotePort: payload.port
+            remotePort: payload.port,
+            relayURL: payload.relay
         )
     }
 }
@@ -43,6 +57,7 @@ enum PairedMacStore {
     private static let macNameKey = "pairedMacName"
     private static let remoteHostKey = "pairedRemoteHost"
     private static let remotePortKey = "pairedRemotePort"
+    private static let relayKey = "pairedRelayURL"
 
     static func load() -> PairedMac? {
         guard let key = loadKey(),
@@ -53,7 +68,8 @@ enum PairedMacStore {
             service: service,
             macName: UserDefaults.standard.string(forKey: macNameKey) ?? service,
             remoteHost: UserDefaults.standard.string(forKey: remoteHostKey),
-            remotePort: (UserDefaults.standard.object(forKey: remotePortKey) as? Int).map { UInt16($0) }
+            remotePort: (UserDefaults.standard.object(forKey: remotePortKey) as? Int).map { UInt16($0) },
+            relayURL: UserDefaults.standard.string(forKey: relayKey)
         )
     }
 
@@ -63,6 +79,7 @@ enum PairedMacStore {
         UserDefaults.standard.set(pairing.macName, forKey: macNameKey)
         UserDefaults.standard.set(pairing.remoteHost, forKey: remoteHostKey)
         UserDefaults.standard.set(pairing.remotePort.map { Int($0) }, forKey: remotePortKey)
+        UserDefaults.standard.set(pairing.relayURL, forKey: relayKey)
     }
 
     static func forget() {
@@ -71,6 +88,7 @@ enum PairedMacStore {
         UserDefaults.standard.removeObject(forKey: macNameKey)
         UserDefaults.standard.removeObject(forKey: remoteHostKey)
         UserDefaults.standard.removeObject(forKey: remotePortKey)
+        UserDefaults.standard.removeObject(forKey: relayKey)
     }
 
     // MARK: - Keychain

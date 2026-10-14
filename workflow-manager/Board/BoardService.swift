@@ -152,7 +152,7 @@ final class BoardService: BoardServerHandler {
             return
         }
         server.markReady(client, name: name)
-        server.send(.welcome(serverName: BoardServer.defaultServiceName), to: client)
+        server.send(.welcome(serverName: BoardServer.displayName, relayURL: server.relayURL), to: client)
     }
 
     /// Called by the transport when a connection goes away, so the device
