@@ -82,7 +82,10 @@ struct MarkdownTextView: NSViewRepresentable {
         view.importsGraphics = false
         view.allowsUndo = true
         view.drawsBackground = false
-        view.isVerticallyResizable = true
+        // SwiftUI owns the frame (`sizeThatFits`). Left resizable, the text
+        // view shrank itself back to its used text after every layout — one
+        // line when empty — and clipped a two-line placeholder.
+        view.isVerticallyResizable = false
         view.isHorizontallyResizable = false
         view.textContainerInset = .zero
         view.isAutomaticQuoteSubstitutionEnabled = false

@@ -345,55 +345,61 @@ struct CardPage: View {
 
     // MARK: - Toolbar
 
+    /// Laid out as design C02: the column menu and the project on the left,
+    /// formatting, Claude and More on the right, each its own capsule.
+    ///
+    /// On macOS 26 the window title is removed (the page's first line is the
+    /// title), and with it the flexible space it used to fill — so the
+    /// trailing items need an explicit flexible spacer, or they pack against
+    /// the leading ones. Earlier systems keep the title, which does the same
+    /// job.
     @ToolbarContentBuilder
     private var toolbar: some ToolbarContent {
         ToolbarItem(placement: .navigation) {
             CardColumnMenu(item: item, large: true)
+                .padding(.horizontal, 6)
         }
         if let project {
-            ToolbarItem(placement: .navigation) {
-                HStack(spacing: 6) {
-                    ProjectBadge(project: project, size: 16)
-                    Text(project.name).font(.system(size: 12)).foregroundStyle(.secondary)
-                }
-                .help("In \(project.name)")
+            if #available(macOS 26, *) {
+                ToolbarSpacer(.fixed, placement: .navigation)
+                ToolbarItem(placement: .navigation) { projectLabel(project) }
+                    .sharedBackgroundVisibility(.hidden)
+            } else {
+                ToolbarItem(placement: .navigation) { projectLabel(project) }
             }
         }
 
-        ToolbarItemGroup {
-            Menu {
-                Button("Title") { editor.setHeading(1) }
-                Button("Heading") { editor.setHeading(2) }
-                Button("Subheading") { editor.setHeading(3) }
-                Button("Body") { editor.setHeading(0) }
-                Divider()
-                Button("Bold  ⌘B") { editor.toggleBold() }
-                Button("Italic  ⌘I") { editor.toggleItalic() }
-                Button("Strikethrough  ⇧⌘X") { editor.toggleStrikethrough() }
-                Button("Inline Code") { editor.toggleInlineCode() }
-                Divider()
-                Button("Bulleted List") { editor.insertBulletList() }
-                Button("Quote") { editor.insertQuote() }
-                Button("Link  ⌘K") { editor.insertLink() }
-            } label: {
-                Label("Format", systemImage: "textformat")
+        if #available(macOS 26, *) {
+            ToolbarSpacer(.flexible)
+        }
+
+        // One item holding all four, so they share one capsule as drawn. As
+        // separate items — or a ControlGroup, which the toolbar splits — each
+        // got a capsule of its own.
+        ToolbarItem {
+            HStack(spacing: 0) {
+                formatMenu
+                toolButton("Checklist (⇧⌘L)", systemImage: "checklist") { editor.toggleChecklist() }
+                toolButton("Code block (⌥⌘C)", systemImage: "chevron.left.forwardslash.chevron.right") {
+                    editor.insertCodeBlock()
+                }
+                if project?.repoSlug != nil {
+                    issueMenu
+                }
             }
-            .help("Format")
-            Button { editor.toggleChecklist() } label: {
-                Label("Checklist", systemImage: "checklist")
+            .padding(.horizontal, 4)
+        }
+
+        if showsClaudeItem {
+            if #available(macOS 26, *) {
+                ToolbarSpacer(.fixed)
             }
-            .help("Checklist (⇧⌘L)")
-            Button { editor.insertCodeBlock() } label: {
-                Label("Code Block", systemImage: "chevron.left.forwardslash.chevron.right")
-            }
-            .help("Code block (⌥⌘C)")
+            ToolbarItem { claudeButton }
         }
 
         if #available(macOS 26, *) {
             ToolbarSpacer(.fixed)
         }
-
-        ToolbarItem { claudeButton }
 
         ToolbarItem {
             Menu {
@@ -419,6 +425,89 @@ struct CardPage: View {
         }
     }
 
+    private func projectLabel(_ project: Project) -> some View {
+        HStack(spacing: 6) {
+            ProjectBadge(project: project, size: 16)
+            Text(project.name).font(.system(size: 12)).foregroundStyle(.secondary)
+        }
+        .padding(.horizontal, 4)
+        .help("In \(project.name)")
+    }
+
+    private func toolButton(_ help: String, systemImage: String, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            Image(systemName: systemImage)
+                .frame(width: 32, height: 24)
+                .contentShape(.rect)
+        }
+        .buttonStyle(.borderless)
+        .help(help)
+        .accessibilityLabel(help)
+    }
+
+    private var formatMenu: some View {
+        Menu {
+            Button("Title") { editor.setHeading(1) }
+            Button("Heading") { editor.setHeading(2) }
+            Button("Subheading") { editor.setHeading(3) }
+            Button("Body") { editor.setHeading(0) }
+            Divider()
+            Button("Bold  ⌘B") { editor.toggleBold() }
+            Button("Italic  ⌘I") { editor.toggleItalic() }
+            Button("Strikethrough  ⇧⌘X") { editor.toggleStrikethrough() }
+            Button("Inline Code") { editor.toggleInlineCode() }
+            Divider()
+            Button("Bulleted List") { editor.insertBulletList() }
+            Button("Quote") { editor.insertQuote() }
+            Button("Link  ⌘K") { editor.insertLink() }
+        } label: {
+            Text("Aa")
+                .font(.system(size: 14, weight: .medium))
+                .frame(width: 32, height: 24)
+                .contentShape(.rect)
+        }
+        .menuStyle(.button)
+        .buttonStyle(.borderless)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .help("Format")
+        .accessibilityLabel("Format")
+    }
+
+    /// The design's "#": the card's GitHub issue.
+    private var issueMenu: some View {
+        Menu {
+            if let number = item.githubIssueNumber {
+                if let url = item.githubIssueURL { Link("Open #\(number) on GitHub", destination: url) }
+                Button("Unlink Issue") { IssueLinking.unlink(item) }
+            } else {
+                Button("Link to Existing Issue…") { linkingIssue = true }
+                Button("Create GitHub Issue…") { creatingIssue = true }
+            }
+        } label: {
+            Image(systemName: "number")
+                .frame(width: 32, height: 24)
+                .contentShape(.rect)
+        }
+        .menuStyle(.button)
+        .buttonStyle(.borderless)
+        .menuIndicator(.hidden)
+        .fixedSize()
+        .accessibilityLabel("GitHub issue")
+        .help(item.githubIssueNumber.map { "GitHub issue #\($0)" } ?? "Link a GitHub issue")
+    }
+
+    /// Whether `claudeButton` has anything to show — an empty toolbar item
+    /// would still draw an empty capsule.
+    private var showsClaudeItem: Bool {
+        switch item.agentState {
+        case .queued: item.workflowRequested
+        case .working: true
+        case .none: !item.isDone && CardActions.claudeIsReachable(item, mcp: mcp)
+        default: false
+        }
+    }
+
     @ViewBuilder
     private var claudeButton: some View {
         let state = item.agentState
@@ -437,6 +526,7 @@ struct CardPage: View {
             Label("Claude working", systemImage: "sparkles")
                 .labelStyle(.titleAndIcon)
                 .foregroundStyle(Theme.agentText)
+                .padding(.horizontal, 8)
         } else if state == .none, !item.isDone, CardActions.claudeIsReachable(item, mcp: mcp) {
             Button {
                 CardActions.setRequested(true, on: item, sync: sync, context: context)
