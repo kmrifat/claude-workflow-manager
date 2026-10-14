@@ -85,6 +85,10 @@ struct HelpGuideView: View {
     Return carries a list on. They stay plain Markdown, so Claude and GitHub
     read them as written.
 
+    **Paste or drop images** — a screenshot with ⌘V, or files from Finder —
+    and they appear in the notes. Double-click one to see it full size; delete
+    its line to remove it. Claude sees them too, through Pitwall's MCP server.
+
     Subtasks are a separate list under the notes — the ones the board counts
     and Claude can tick.
 

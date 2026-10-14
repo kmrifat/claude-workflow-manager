@@ -100,7 +100,7 @@ final class MCPTools {
         MCPToolDefinition(
             name: "get_card",
             title: "Get card",
-            description: "One card in full: details, subtasks with their ids, blockers, linked GitHub issue and recent activity.",
+            description: "One card in full: details, subtasks with their ids, blockers, linked GitHub issue and recent activity — plus the images pasted into its details, as images you can see.",
             properties: ["card_id": cardArgument],
             required: ["card_id"],
             readOnly: true
@@ -162,6 +162,7 @@ final class MCPTools {
     4. Record your branch with update_card. When you open a pull request, call update_card with status "review" and pr_url.
     5. Use set_subtask as you finish subtasks, and add_note for anything the user should read.
     6. The user can leave you notes on a card; get_card returns them in its activity, by "You". Read them before you start and when you resume.
+    7. Images in a card's details appear as ![name](attachment:<id>); get_card returns the first few as images you can see.
 
     Never move a card to "done" yourself unless the user asked; review is where your work stops.
     """
@@ -252,8 +253,33 @@ final class MCPTools {
                 if let note = event.note { entry["note"] = note }
                 return entry
             }
-        return ["card": card]
+
+        // Images in the notes: listed in the card, and the first few sent as
+        // image content so the model can look at them — a pasted screenshot is
+        // often the whole bug report. Scaled down: full-size screenshots are
+        // megabytes, and a model sees no more detail than this.
+        let images = AttachmentReferences.ids(in: item.details).compactMap { id in
+            item.attachments.first { $0.uuid == id && !$0.isDeleted }
+        }
+        var result: [String: Any] = ["card": card]
+        if !images.isEmpty {
+            card["images"] = images.map {
+                ["id": $0.uuid.uuidString, "name": $0.filename, "width": $0.pixelWidth, "height": $0.pixelHeight]
+                    as [String: Any]
+            }
+            result["card"] = card
+            result[MCPTools.imagesKey] = images.prefix(Self.maxImages).compactMap { attachment -> [String: String]? in
+                guard let jpeg = AttachmentImage.preview(of: attachment.data) else { return nil }
+                return ["data": jpeg.base64EncodedString(), "mimeType": "image/jpeg"]
+            }
+        }
+        return result
     }
+
+    /// Where a tool hands back images; `MCPServer` turns them into image
+    /// content and keeps them out of the JSON text.
+    static let imagesKey = "__images"
+    static let maxImages = 4
 
     private func summary(_ item: WorkItem) -> [String: Any] {
         var card: [String: Any] = [

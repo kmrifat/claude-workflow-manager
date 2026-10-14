@@ -19,6 +19,7 @@
 
 import AppKit
 import SwiftUI
+import UniformTypeIdentifiers
 
 /// Lets the window's toolbar act on the notes: the formatting buttons live
 /// outside the text view but have to edit inside it.
@@ -51,12 +52,20 @@ struct MarkdownTextView: NSViewRepresentable {
     var controller: MarkdownEditorController?
     /// Up from the first line: the window moves focus back to the title.
     var onExitTop: (() -> Void)?
+    /// The picture for an image line's target (`attachment:<uuid>`), if any.
+    var imageProvider: ((String) -> NSImage?)?
+    /// Stores pasted or dropped image bytes and returns the Markdown that
+    /// refers to them, or nil if they are not an image.
+    var onInsertImage: ((Data, String?) -> String?)?
+    /// A double-click on an image.
+    var onOpenImage: ((String) -> Void)?
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
     func makeNSView(context: Context) -> MarkdownNSTextView {
         let storage = NSTextStorage()
         let layout = MarkdownLayoutManager()
+        layout.imageProvider = imageProvider
         storage.addLayoutManager(layout)
         let container = NSTextContainer(size: NSSize(width: 600, height: CGFloat.greatestFiniteMagnitude))
         // Width follows the frame by hand (`setFrameSize`): `sizeThatFits`
@@ -84,6 +93,12 @@ struct MarkdownTextView: NSViewRepresentable {
         view.typingAttributes = MarkdownTheme.body
         view.placeholder = placeholder
         view.onExitTop = onExitTop
+        view.onInsertImage = onInsertImage
+        view.onOpenImage = onOpenImage
+        view.onWidthChange = { [weak coordinator = context.coordinator, weak view] in
+            guard let view, let storage = view.textStorage else { return }
+            coordinator?.restyle(storage)
+        }
 
         view.string = text
         context.coordinator.restyle(storage)
@@ -95,6 +110,9 @@ struct MarkdownTextView: NSViewRepresentable {
         context.coordinator.parent = self
         view.placeholder = placeholder
         view.onExitTop = onExitTop
+        view.onInsertImage = onInsertImage
+        view.onOpenImage = onOpenImage
+        (view.layoutManager as? MarkdownLayoutManager)?.imageProvider = imageProvider
         controller?.textView = view
         // Only an outside change — another window, the phone — replaces the
         // text. Our own keystrokes come back through the binding unchanged,
@@ -159,8 +177,14 @@ struct MarkdownTextView: NSViewRepresentable {
         func restyle(_ storage: NSTextStorage) {
             let full = NSRange(location: 0, length: storage.length)
             storage.setAttributes(MarkdownTheme.body, range: full)
+            let width = storage.layoutManagers.first?.textContainers.first?.size.width ?? 600
             for span in MarkdownStyler.spans(in: storage.string) where NSMaxRange(span.range) <= storage.length {
-                MarkdownTheme.apply(span, to: storage)
+                if case .image(let target) = span.style {
+                    MarkdownTheme.applyImage(target, image: parent.imageProvider?(target), width: width,
+                                             range: span.range, to: storage)
+                } else {
+                    MarkdownTheme.apply(span, to: storage)
+                }
             }
             let string = storage.string as NSString
             string.enumerateSubstrings(in: full, options: .byLines) { line, range, enclosing, _ in
@@ -274,6 +298,9 @@ enum MarkdownTheme {
         case .link:
             storage.addAttribute(.foregroundColor, value: NSColor.linkColor, range: range)
             storage.addAttribute(.underlineStyle, value: NSUnderlineStyle.single.rawValue, range: range)
+        case .image:
+            // Laid out by `applyImage`, which needs the picture and the width.
+            break
         case .listItem(let depth, let marker):
             // A hanging indent, so wrapped lines line up with the text and not
             // with the bullet.
@@ -289,6 +316,31 @@ enum MarkdownTheme {
         }
     }
 
+    /// An image line: its reference, small and faded, with room below for the
+    /// picture, which `MarkdownLayoutManager` draws there. Shown at most at
+    /// its own size in points — a screenshot from a Retina display is half its
+    /// pixel width — never wider than the column, and never taller than 480.
+    static func applyImage(_ target: String, image: NSImage?, width: CGFloat, range: NSRange, to storage: NSTextStorage) {
+        storage.addAttribute(.font, value: NSFont.systemFont(ofSize: 11), range: range)
+        guard let image, image.size.width > 0, image.size.height > 0 else { return }
+        let size = displaySize(of: image, width: width)
+        storage.addAttribute(.markdownImage, value: target, range: range)
+        let style = NSMutableParagraphStyle()
+        style.paragraphSpacingBefore = 4
+        style.paragraphSpacing = size.height + 12
+        storage.addAttribute(.paragraphStyle, value: style, range: range)
+    }
+
+    static func displaySize(of image: NSImage, width: CGFloat) -> CGSize {
+        let pixels = image.representations.first.map { CGSize(width: $0.pixelsWide, height: $0.pixelsHigh) }
+        let natural = pixels.flatMap { $0.width > 0 ? CGSize(width: $0.width / 2, height: $0.height / 2) : nil }
+            ?? image.size
+        var size = natural
+        if size.width > width { size = CGSize(width: width, height: width * natural.height / natural.width) }
+        if size.height > 480 { size = CGSize(width: 480 * natural.width / natural.height, height: 480) }
+        return CGSize(width: floor(size.width), height: floor(size.height))
+    }
+
     private static func convert(_ storage: NSTextStorage, _ range: NSRange, adding trait: NSFontTraitMask) {
         storage.enumerateAttribute(.font, in: range) { value, run, _ in
             let font = (value as? NSFont) ?? bodyFont
@@ -302,6 +354,7 @@ extension NSAttributedString.Key {
     static let markdownCheckbox = NSAttributedString.Key("pitwall.markdownCheckbox")
     static let markdownCodeBlock = NSAttributedString.Key("pitwall.markdownCodeBlock")
     static let markdownQuote = NSAttributedString.Key("pitwall.markdownQuote")
+    static let markdownImage = NSAttributedString.Key("pitwall.markdownImage")
 }
 
 // MARK: - Drawing
@@ -311,6 +364,11 @@ extension NSAttributedString.Key {
 /// coloured clear, so selection, copy and the caret still see real Markdown.
 final class MarkdownLayoutManager: NSLayoutManager {
     static let codeInset: CGFloat = 12
+
+    var imageProvider: ((String) -> NSImage?)?
+    /// Where each image was last drawn, in container coordinates, so a
+    /// double-click can find it.
+    private(set) var imageFrames: [(rect: NSRect, target: String)] = []
 
     override func drawBackground(forGlyphRange glyphsToShow: NSRange, at origin: NSPoint) {
         super.drawBackground(forGlyphRange: glyphsToShow, at: origin)
@@ -336,6 +394,28 @@ final class MarkdownLayoutManager: NSLayoutManager {
         NSColor.labelColor.withAlphaComponent(0.06).setFill()
         for panel in panels {
             NSBezierPath(roundedRect: panel.insetBy(dx: 0, dy: -5), xRadius: 8, yRadius: 8).fill()
+        }
+
+        storage.enumerateAttribute(.markdownImage, in: characters) { value, run, _ in
+            guard let target = value as? String, let image = imageProvider?(target) else { return }
+            let glyphs = glyphRange(forCharacterRange: run, actualCharacterRange: nil)
+            let line = lineFragmentUsedRect(forGlyphAt: max(NSMaxRange(glyphs) - 1, glyphs.location), effectiveRange: nil)
+            let size = MarkdownTheme.displaySize(of: image, width: container.size.width)
+            let frame = NSRect(x: 0, y: line.maxY + 6, width: size.width, height: size.height)
+            imageFrames.removeAll { $0.target == target }
+            imageFrames.append((frame, target))
+
+            let onScreen = frame.offsetBy(dx: origin.x, dy: origin.y)
+            NSGraphicsContext.saveGraphicsState()
+            let clip = NSBezierPath(roundedRect: onScreen, xRadius: 8, yRadius: 8)
+            clip.addClip()
+            image.draw(in: onScreen, from: .zero, operation: .sourceOver, fraction: 1,
+                       respectFlipped: true, hints: [.interpolation: NSImageInterpolation.high])
+            NSGraphicsContext.restoreGraphicsState()
+            NSColor.labelColor.withAlphaComponent(0.1).setStroke()
+            let edge = NSBezierPath(roundedRect: onScreen.insetBy(dx: 0.5, dy: 0.5), xRadius: 8, yRadius: 8)
+            edge.lineWidth = 1
+            edge.stroke()
         }
 
         storage.enumerateAttribute(.markdownQuote, in: characters) { value, run, _ in
@@ -401,12 +481,18 @@ final class MarkdownLayoutManager: NSLayoutManager {
 final class MarkdownNSTextView: NSTextView {
     var placeholder: String = "" { didSet { if placeholder != oldValue { needsDisplay = true } } }
     var onExitTop: (() -> Void)?
+    var onInsertImage: ((Data, String?) -> String?)?
+    var onOpenImage: ((String) -> Void)?
+    /// An image's height depends on the column width, so a resize restyles.
+    var onWidthChange: (() -> Void)?
 
     override var isFlipped: Bool { true }
 
     override func setFrameSize(_ newSize: NSSize) {
+        let widthChanged = abs(newSize.width - frame.width) > 0.5
         super.setFrameSize(newSize)
         textContainer?.size = NSSize(width: newSize.width, height: .greatestFiniteMagnitude)
+        if widthChanged, textStorage?.string.contains("![") == true { onWidthChange?() }
     }
 
     override var intrinsicContentSize: NSSize {
@@ -437,6 +523,10 @@ final class MarkdownNSTextView: NSTextView {
 
     override func mouseDown(with event: NSEvent) {
         let point = convert(event.locationInWindow, from: nil)
+        if event.clickCount == 2, let target = imageTarget(at: point) {
+            onOpenImage?(target)
+            return
+        }
         if let index = checkboxIndex(at: point) {
             toggleCheckbox(atCharacter: index)
             return
@@ -468,6 +558,68 @@ final class MarkdownNSTextView: NSTextView {
         let body = line.hasSuffix("\n") ? String(line.dropLast()) : line
         guard let toggled = MarkdownStyler.togglingCheckbox(body) else { return }
         replace(NSRange(location: lineRange.location, length: (body as NSString).length), with: toggled, select: nil)
+    }
+
+    private func imageTarget(at point: NSPoint) -> String? {
+        guard let layout = layoutManager as? MarkdownLayoutManager else { return nil }
+        let inContainer = NSPoint(x: point.x - textContainerOrigin.x, y: point.y - textContainerOrigin.y)
+        return layout.imageFrames.first { $0.rect.contains(inContainer) }?.target
+    }
+
+    // MARK: Images
+
+    /// A pasted screenshot or image becomes an attachment and a reference on
+    /// a line of its own. Text on the pasteboard wins: copying cells from a
+    /// spreadsheet also carries a picture of them, and those should paste as
+    /// text.
+    override func paste(_ sender: Any?) {
+        if insertImages(from: .general, replacing: selectedRange()) { return }
+        super.paste(sender)
+    }
+
+    override var acceptableDragTypes: [NSPasteboard.PasteboardType] {
+        super.acceptableDragTypes + [.fileURL, .png, .tiff]
+    }
+
+    override func performDragOperation(_ sender: any NSDraggingInfo) -> Bool {
+        let point = convert(sender.draggingLocation, from: nil)
+        let index = characterIndexForInsertion(at: point)
+        if insertImages(from: sender.draggingPasteboard, replacing: NSRange(location: index, length: 0)) {
+            return true
+        }
+        return super.performDragOperation(sender)
+    }
+
+    func insertImages(from pasteboard: NSPasteboard, replacing range: NSRange) -> Bool {
+        guard let onInsertImage else { return false }
+        let payloads = imagePayloads(on: pasteboard)
+        let references = payloads.compactMap { onInsertImage($0.data, $0.name) }
+        guard !references.isEmpty else { return false }
+
+        let ns = string as NSString
+        let newline = unichar(10)
+        let before = range.location > 0 && ns.character(at: range.location - 1) != newline ? "\n" : ""
+        let after = NSMaxRange(range) < ns.length && ns.character(at: NSMaxRange(range)) != newline ? "\n" : ""
+        let text = before + references.joined(separator: "\n") + "\n" + after
+        let caret = range.location + (text as NSString).length - (after as NSString).length
+        replace(range, with: text, select: NSRange(location: caret, length: 0))
+        window?.makeFirstResponder(self)
+        return true
+    }
+
+    private func imagePayloads(on pasteboard: NSPasteboard) -> [(data: Data, name: String?)] {
+        let options: [NSPasteboard.ReadingOptionKey: Any] = [.urlReadingFileURLsOnly: true]
+        if let urls = pasteboard.readObjects(forClasses: [NSURL.self], options: options) as? [URL] {
+            let images = urls.filter { UTType(filenameExtension: $0.pathExtension)?.conforms(to: .image) == true }
+            let files = images.compactMap { url in (try? Data(contentsOf: url)).map { (data: $0, name: Optional(url.lastPathComponent)) } }
+            if !files.isEmpty { return files }
+            if !urls.isEmpty { return [] }
+        }
+        if pasteboard.string(forType: .string) != nil { return [] }
+        for type in [NSPasteboard.PasteboardType.png, .tiff] {
+            if let data = pasteboard.data(forType: type) { return [(data, nil)] }
+        }
+        return []
     }
 
     // MARK: Lists

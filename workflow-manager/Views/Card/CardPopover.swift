@@ -34,6 +34,10 @@ struct CardPopover: View {
                         .foregroundStyle(item.title.isEmpty ? .secondary : .primary)
                         .fixedSize(horizontal: false, vertical: true)
                         .padding(.bottom, 8)
+                    if !thumbnails.isEmpty {
+                        thumbnailStrip
+                            .padding(.bottom, 10)
+                    }
                     if !preview.isEmpty {
                         IssueMarkdownView(markdown: preview, accent: item.project?.accent.color ?? .accentColor)
                             .font(.system(size: 12.5))
@@ -134,9 +138,11 @@ struct CardPopover: View {
 
     // MARK: - Notes
 
-    /// The first few blocks of the notes — a glance, not the document.
+    /// The first few blocks of the notes — a glance, not the document. Image
+    /// lines are left out; the pictures show as thumbnails above.
     private var preview: String {
         let lines = item.details.split(separator: "\n", omittingEmptySubsequences: false)
+            .filter { AttachmentReferences.ids(in: String($0)).isEmpty }
         var kept: [Substring] = []
         var characters = 0
         for line in lines {
@@ -145,6 +151,39 @@ struct CardPopover: View {
             characters += line.count
         }
         return kept.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+    }
+
+    // MARK: - Images
+
+    private var thumbnails: [CardAttachment] {
+        AttachmentReferences.ids(in: item.details).compactMap { id in
+            item.attachments.first { $0.uuid == id && !$0.isDeleted }
+        }
+    }
+
+    private var thumbnailStrip: some View {
+        HStack(spacing: 6) {
+            ForEach(thumbnails.prefix(3), id: \.uuid) { attachment in
+                if let image = NSImage(data: attachment.data) {
+                    Image(nsImage: image)
+                        .resizable()
+                        .aspectRatio(contentMode: .fill)
+                        .frame(width: 112, height: 72)
+                        .clipShape(.rect(cornerRadius: 6))
+                        .overlay { RoundedRectangle(cornerRadius: 6).strokeBorder(Color.primary.opacity(0.1)) }
+                        .contentShape(.rect)
+                        .onTapGesture(perform: onOpenWindow)
+                        .help(attachment.filename)
+                }
+            }
+            if thumbnails.count > 3 {
+                Text("+\(thumbnails.count - 3)")
+                    .font(.system(size: 12, weight: .semibold))
+                    .foregroundStyle(.secondary)
+                    .frame(width: 44, height: 72)
+                    .background(Color.primary.opacity(0.06), in: .rect(cornerRadius: 6))
+            }
+        }
     }
 
     // MARK: - Properties

@@ -275,6 +275,21 @@ converting at every one of those edges. Things to know:
   Drawn per run, it came out striped.
 - **The checkbox markers are monospaced (and invisible)**, so `[x]` and `[ ]`
   are the same width and ticking an item does not shift its text.
+- **Images are attachments, referenced from the Markdown.** Paste (⌘V) or
+  drop one and it becomes a `CardAttachment` (`.externalStorage`) with
+  `![name](attachment:<uuid>)` on its own line; the editor draws the picture
+  under that line in the space a paragraph spacing reserves. Not base64 in the
+  notes — it would bloat `tasks.json`, every phone snapshot and every MCP read
+  — and not files in the repository, which a card need not have and a paste
+  must not write into. Text on the pasteboard beats a picture of it (a
+  spreadsheet copy carries both). Deleting the reference line is how an image
+  is removed; unreferenced attachments are swept when the card's window
+  closes, not per keystroke, so ⌘Z of a deleted line still finds its image.
+  `get_card` sends up to four as MCP **image content**, scaled to 1568 px JPEG,
+  so Claude can see a pasted screenshot; `MCPTools.imagesKey` is how a tool
+  hands them to `MCPServer` without putting base64 in the JSON. A GitHub issue
+  created from the card gets a note in place of each image, and the phone
+  shows the reference as text.
 - **Subtasks are not Markdown checklists.** They stay their own model — the
   board counts them and `set_subtask` ticks them — and a `- [ ]` typed in the
   notes stays text.

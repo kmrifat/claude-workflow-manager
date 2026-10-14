@@ -40,6 +40,9 @@ enum MarkdownStyle: Equatable, Sendable {
     case checkedText
     /// The visible text of `[text](url)`.
     case link
+    /// A line that is only an image, `![alt](target)`. Drawn as the image,
+    /// under its reference — the way Notes shows a pasted picture.
+    case image(target: String)
     /// A list item's whole line, for its hanging indent. `marker` is how many
     /// UTF-16 units the bullet and its space take, and `depth` the nesting.
     case listItem(depth: Int, marker: Int)
@@ -87,6 +90,7 @@ enum MarkdownStyler {
     private static let bullet = try! NSRegularExpression(pattern: "^([ \\t]*)([-*+])[ \\t]")
     private static let ordered = try! NSRegularExpression(pattern: "^([ \\t]*)(\\d{1,9})[.)][ \\t]")
     private static let rule = try! NSRegularExpression(pattern: "^[ \\t]*([-*_])([ \\t]*\\1){2,}[ \\t]*$")
+    private static let imageLine = try! NSRegularExpression(pattern: "^[ \\t]*!\\[[^\\]\\n]*\\]\\(([^)\\s]+)\\)[ \\t]*$")
 
     private static func lineSpans(_ line: String, at offset: Int) -> [MarkdownSpan] {
         let ns = line as NSString
@@ -97,6 +101,11 @@ enum MarkdownStyler {
         }
 
         if rule.firstMatch(in: line, range: whole) != nil {
+            span(whole, .marker)
+            return spans
+        }
+        if let match = imageLine.firstMatch(in: line, range: whole) {
+            span(whole, .image(target: ns.substring(with: match.range(at: 1))))
             span(whole, .marker)
             return spans
         }

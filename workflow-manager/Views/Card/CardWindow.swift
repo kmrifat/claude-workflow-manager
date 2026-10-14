@@ -20,6 +20,7 @@
 
 import SwiftUI
 import SwiftData
+import UniformTypeIdentifiers
 
 struct CardWindow: View {
     static let sceneID = "card"
@@ -43,7 +44,7 @@ struct CardWindow: View {
             if let item, let project = item.project {
                 CardPage(item: item)
                     .environment(syncCoordinator.model(for: project))
-                    .onDisappear { discardIfBlank(item) }
+                    .onDisappear { tidy(item) }
             } else {
                 ContentUnavailableView(
                     "Card Not Found",
@@ -55,10 +56,12 @@ struct CardWindow: View {
         }
     }
 
-    /// Nothing typed, nothing attached: the card goes, as an empty note does.
-    private func discardIfBlank(_ item: WorkItem) {
-        guard !item.isDeleted, item.isBlank else { return }
-        context.delete(item)
+    /// On close: images whose reference was deleted go, and then a card with
+    /// nothing typed and nothing attached goes too, as an empty note does.
+    private func tidy(_ item: WorkItem) {
+        guard !item.isDeleted else { return }
+        for attachment in item.unreferencedAttachments { context.delete(attachment) }
+        if item.isBlank { context.delete(item) }
     }
 }
 
@@ -73,6 +76,7 @@ struct CardPage: View {
     @Environment(MCPServer.self) private var mcp: MCPServer?
 
     @State private var editor = MarkdownEditorController()
+    @State private var images = AttachmentImageCache()
     @FocusState private var titleFocused: Bool
     @State private var newSubtask = ""
     @FocusState private var newSubtaskFocused: Bool
@@ -120,7 +124,10 @@ struct CardPage: View {
                     text: $item.details,
                     placeholder: "Notes. Markdown works as you type — # for a heading, - for a list, [ ] for a checklist, ``` for code.",
                     controller: editor,
-                    onExitTop: { titleFocused = true }
+                    onExitTop: { titleFocused = true },
+                    imageProvider: { images.image(for: $0, in: item) },
+                    onInsertImage: insertImage,
+                    onOpenImage: openImage
                 )
                 .padding(.bottom, 26)
                 subtasks
@@ -442,6 +449,33 @@ struct CardPage: View {
         }
     }
 
+    // MARK: - Images
+
+    /// A pasted or dropped image becomes an attachment of this card; the notes
+    /// get the reference.
+    private func insertImage(_ data: Data, name: String?) -> String? {
+        guard let image = AttachmentImage.normalize(data) else { return nil }
+        let ext = UTType(image.contentType)?.preferredFilenameExtension ?? "png"
+        let filename = name ?? "Pasted image.\(ext)"
+        let attachment = CardAttachment(
+            filename: filename, contentType: image.contentType, data: image.data,
+            pixelWidth: image.pixelWidth, pixelHeight: image.pixelHeight
+        )
+        context.insert(attachment)
+        attachment.item = item
+        return attachment.markdownReference
+    }
+
+    /// Full size, in whatever opens images — Preview, usually.
+    private func openImage(_ target: String) {
+        guard let attachment = images.attachment(for: target, in: item) else { return }
+        let folder = FileManager.default.temporaryDirectory.appending(path: "Pitwall Images", directoryHint: .isDirectory)
+        try? FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let url = folder.appending(path: "\(attachment.uuid.uuidString.prefix(8)) \(attachment.filename)")
+        guard (try? attachment.data.write(to: url)) != nil else { return }
+        NSWorkspace.shared.open(url)
+    }
+
     // MARK: - Helpers
 
     private var eligibleBlockers: [WorkItem] {
@@ -456,6 +490,29 @@ struct CardPage: View {
         // From the cache only — opening a card must not spawn `gh`.
         let issues = await IssueCache.load(for: project, in: context)?.issues ?? []
         repositoryLabels = Set(issues.flatMap { $0.labels.map(\.name) }).sorted()
+    }
+}
+
+/// Decoded images for a card's notes, kept for as long as its window is open:
+/// the notes are drawn far more often than an image changes, and decoding a
+/// screenshot on every draw would be the whole frame budget.
+@MainActor
+final class AttachmentImageCache {
+    private var images: [UUID: NSImage] = [:]
+
+    func attachment(for target: String, in item: WorkItem) -> CardAttachment? {
+        guard target.hasPrefix(AttachmentReferences.scheme + ":"),
+              let id = UUID(uuidString: String(target.dropFirst(AttachmentReferences.scheme.count + 1)))
+        else { return nil }
+        return item.attachments.first { $0.uuid == id && !$0.isDeleted }
+    }
+
+    func image(for target: String, in item: WorkItem) -> NSImage? {
+        guard let attachment = attachment(for: target, in: item) else { return nil }
+        if let cached = images[attachment.uuid] { return cached }
+        guard let image = NSImage(data: attachment.data) else { return nil }
+        images[attachment.uuid] = image
+        return image
     }
 }
 
