@@ -17,6 +17,7 @@ struct ProjectDetailView: View {
     @Binding var viewMode: BoardViewMode
     @Binding var filter: BoardFilter
     @Binding var inspectedItemID: UUID?
+    var focus: FocusState<FocusPane?>.Binding
 
     @State private var editorTarget: ProjectEditorTarget?
     @State private var showsOverview = false
@@ -148,7 +149,13 @@ struct ProjectDetailView: View {
     private var content: some View {
         switch viewMode {
         case .board:
-            BoardView(project: project, inspectedItemID: $inspectedItemID, filter: filter)
+            BoardView(
+                project: project,
+                inspectedItemID: $inspectedItemID,
+                filter: filter,
+                focus: focus,
+                onOpenItem: { editingItemID = $0.uuid }
+            )
         case .list:
             ProjectItemsTable(project: project, inspectedItemID: $inspectedItemID, filter: filter)
         case .timeline:
@@ -375,6 +382,7 @@ struct ProjectDetailView: View {
     @Previewable @State var mode: BoardViewMode = .board
     @Previewable @State var filter = BoardFilter()
     @Previewable @State var inspected: UUID?
+    @Previewable @FocusState var focus: FocusPane?
 
     if let project = SampleData.firstProject {
         NavigationStack {
@@ -382,7 +390,8 @@ struct ProjectDetailView: View {
                 project: project,
                 viewMode: $mode,
                 filter: $filter,
-                inspectedItemID: $inspected
+                inspectedItemID: $inspected,
+                focus: $focus
             )
         }
         .modelContainer(SampleData.container)

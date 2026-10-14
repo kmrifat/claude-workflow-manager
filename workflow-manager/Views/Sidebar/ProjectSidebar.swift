@@ -15,6 +15,13 @@
 //  state, and writing them into SwiftData would put every fold on the undo
 //  stack and wake the board sync for nothing.
 //
+//  The keyboard is hand-rolled for the same reason, on Finder's rules: ↑↓ move
+//  and the selection follows, → opens then steps in, ← closes then steps out,
+//  Return opens (and moves into the board), Space folds, and typing a name
+//  jumps to it. The rules themselves are pure, in `TreeNavigation`; this view
+//  only says what the visible rows are (`entries`) and what landing on one
+//  does (`activate`).
+//
 
 import SwiftUI
 import SwiftData
@@ -27,6 +34,8 @@ struct ProjectSidebar: View {
 
     @Binding var destination: AppDestination
     @Binding var viewMode: BoardViewMode
+    /// Shared with the board, so Tab can hand the keyboard across.
+    var focus: FocusState<FocusPane?>.Binding
     /// Whether Phone Access and the MCP server are serving, for the footer.
     var isSharing: Bool = false
     var isMCPRunning: Bool = false
@@ -46,6 +55,12 @@ struct ProjectSidebar: View {
     @State private var dropTargetKey: String?
     @State private var filterText = ""
     @FocusState private var filterFocused: Bool
+
+    /// The row the keyboard is on. Usually the selection, but it can rest on a
+    /// folder or a section header, which are never selected.
+    @State private var cursor: SidebarNode?
+    @State private var typeahead = ""
+    @State private var typeaheadAt = Date.distantPast
 
     /// Things open by default that the user closed: workspaces, folders, Pinned,
     /// and the open project's view list.
@@ -84,18 +99,28 @@ struct ProjectSidebar: View {
     var body: some View {
         VStack(spacing: 0) {
             filterField
-            ScrollView {
-                VStack(alignment: .leading, spacing: 1) {
-                    if isFiltering {
-                        filterResults
-                    } else {
-                        tree
+            ScrollViewReader { proxy in
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 1) {
+                        if isFiltering {
+                            filterResults
+                        } else {
+                            tree
+                        }
                     }
+                    .padding(.horizontal, 10)
+                    .padding(.bottom, 10)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .padding(.horizontal, 10)
-                .padding(.bottom, 10)
-                .frame(maxWidth: .infinity, alignment: .leading)
+                .onChange(of: cursor) { _, node in
+                    guard let node else { return }
+                    withAnimation(.snappy(duration: 0.15)) { proxy.scrollTo(node) }
+                }
             }
+            .focusable()
+            .focused(focus, equals: .sidebar)
+            .focusEffectDisabled()
+            .onKeyPress(phases: [.down, .repeat], action: handleKey)
             footer
         }
         .overlay {
@@ -158,6 +183,16 @@ struct ProjectSidebar: View {
         .task {
             SidebarMutations.adoptLegacyGroups(in: context)
         }
+        .onChange(of: focus.wrappedValue) { _, pane in
+            // Arriving by ⇧Tab, or by a click on empty space: start on the
+            // selection rather than wherever the cursor was left.
+            guard pane == .sidebar else { return }
+            if cursor == nil || !entries.contains(where: { $0.node == cursor }) {
+                cursor = selectedNode(in: entries)
+            }
+        }
+        .onChange(of: destination) { _, _ in followSelection() }
+        .onChange(of: viewMode) { _, _ in followSelection() }
         // AppKit makes the window's first text field its initial first
         // responder, so every launch opened with the filter focused and ringed.
         // `.defaultFocus(_, false)` does not override that, and resigning in
@@ -176,8 +211,25 @@ struct ProjectSidebar: View {
                 .textFieldStyle(.plain)
                 .font(.system(size: 12))
                 .focused($filterFocused)
-                .onSubmit { filterMatches.first.map(open) }
-                .onExitCommand { filterText = ""; filterFocused = false }
+                // Return opens the best match and hands the keyboard to the
+                // list, so ↓ carries on through the other matches.
+                .onSubmit {
+                    guard let first = filterMatches.first else { return }
+                    open(first)
+                    cursor = .project(first.uuid, inPinned: false)
+                    focus.wrappedValue = .sidebar
+                }
+                .onKeyPress(.downArrow) {
+                    guard let first = entries.first else { return .ignored }
+                    cursor = first.node
+                    activate(first.node)
+                    focus.wrappedValue = .sidebar
+                    return .handled
+                }
+                .onExitCommand {
+                    filterText = ""
+                    focus.wrappedValue = .sidebar
+                }
             if isFiltering {
                 Button {
                     filterText = ""
@@ -268,10 +320,14 @@ struct ProjectSidebar: View {
 
         if !pinned.isEmpty {
             let open = isOpen("pinned")
-            SidebarSectionHeader(title: "Pinned", isOpen: open) { toggle("pinned") }
+            SidebarSectionHeader(title: "Pinned", isOpen: open, isFocused: isCursor(.section("pinned"))) {
+                place(.section("pinned"))
+                toggle("pinned")
+            }
+            .id(SidebarNode.section("pinned"))
             if open {
                 ForEach(pinned, id: \.uuid) { project in
-                    projectNode(project, depth: 0, expandable: false)
+                    projectNode(project, depth: 0, expandable: false, inPinned: true)
                 }
             }
         }
@@ -285,9 +341,12 @@ struct ProjectSidebar: View {
                 Color.clear.frame(height: 8)
             } else {
                 let open = isOpen("unfiled")
-                SidebarSectionHeader(title: "No Folder", symbol: "tray", count: unfiled.count, isOpen: open) {
+                SidebarSectionHeader(title: "No Folder", symbol: "tray", count: unfiled.count, isOpen: open,
+                                     isFocused: isCursor(.section("unfiled"))) {
+                    place(.section("unfiled"))
                     toggle("unfiled")
                 }
+                .id(SidebarNode.section("unfiled"))
                 .dropDestination(for: String.self) { payloads, _ in
                     drop(payloads, into: nil)
                 }
@@ -301,9 +360,12 @@ struct ProjectSidebar: View {
 
         if !archived.isEmpty {
             let open = openedKeys.contains("archived")
-            SidebarSectionHeader(title: "Archived", symbol: "archivebox", count: archived.count, isOpen: open) {
+            SidebarSectionHeader(title: "Archived", symbol: "archivebox", count: archived.count, isOpen: open,
+                                 isFocused: isCursor(.section("archived"))) {
+                place(.section("archived"))
                 toggleOpened("archived")
             }
+            .id(SidebarNode.section("archived"))
             if open {
                 ForEach(archived, id: \.uuid) { project in
                     projectNode(project, depth: 0, expandable: false)
@@ -332,7 +394,8 @@ struct ProjectSidebar: View {
         dot: Color? = nil
     ) -> some View {
         let selected = destination == target
-        return SidebarRow(isSelected: selected, title: title) {
+        let node = SidebarNode.destination(target)
+        return SidebarRow(isSelected: selected, isFocused: isCursor(node), title: title) {
             Image(systemName: symbol)
                 .font(.system(size: 13))
                 .foregroundStyle(selected ? .white : tint)
@@ -344,7 +407,8 @@ struct ProjectSidebar: View {
                 }
             }
         }
-        .onTapGesture { destination = target }
+        .onTapGesture { select(node) }
+        .id(node)
     }
 
     // MARK: - Workspaces and folders
@@ -360,7 +424,11 @@ struct ProjectSidebar: View {
                 symbol: "building.2",
                 count: contained.count,
                 isOpen: open,
-                onToggle: { toggle(key) }
+                isFocused: isCursor(.section(key)),
+                onToggle: {
+                    place(.section(key))
+                    toggle(key)
+                }
             ) {
                 if !open {
                     let rollup = FolderRollup(projects: contained, terminals: terminalStore)
@@ -372,6 +440,7 @@ struct ProjectSidebar: View {
                 }
             }
             .background(dropHighlight(key), in: .rect(cornerRadius: 6))
+            .id(SidebarNode.section(key))
             .contextMenu { folderMenu(workspace) }
             .draggable("folder:\(key)")
             .dropDestination(for: String.self) { payloads, _ in
@@ -411,6 +480,7 @@ struct ProjectSidebar: View {
                 SidebarRow(
                     depth: depth,
                     disclosure: open ? .open : .closed,
+                    isFocused: isCursor(.folder(folder.uuid)),
                     onDisclosure: { toggle(key) },
                     title: folder.displayName,
                     subtitle: open || rollup.isEmpty ? nil : AnyView(rollup.view)
@@ -424,7 +494,11 @@ struct ProjectSidebar: View {
                         .monospacedDigit()
                 }
                 .background(dropHighlight(key), in: .rect(cornerRadius: 6))
-                .onTapGesture { withAnimation(.smooth(duration: 0.25)) { toggle(key) } }
+                .onTapGesture {
+                    place(.folder(folder.uuid))
+                    withAnimation(.smooth(duration: 0.25)) { toggle(key) }
+                }
+                .id(SidebarNode.folder(folder.uuid))
                 .contextMenu { folderMenu(folder) }
                 .draggable("folder:\(key)")
                 .dropDestination(for: String.self) { payloads, _ in
@@ -446,8 +520,14 @@ struct ProjectSidebar: View {
     ///
     /// Only the open project expands: with dozens of projects, a tree where
     /// every project can show four children is a tree nobody can scan.
-    private func projectNode(_ project: Project, depth: Int, expandable: Bool = true) -> AnyView {
+    private func projectNode(
+        _ project: Project,
+        depth: Int,
+        expandable: Bool = true,
+        inPinned: Bool = false
+    ) -> AnyView {
         let key = "p:\(project.uuid.uuidString)"
+        let node = SidebarNode.project(project.uuid, inPinned: inPinned)
         let isOpenProject = destination.projectID == project.uuid
         let expanded = expandable && isOpenProject && isOpen(key)
         return AnyView(
@@ -457,6 +537,7 @@ struct ProjectSidebar: View {
                     disclosure: expandable ? (expanded ? .open : .closed) : .placeholder,
                     isSelected: isOpenProject && !expanded && expandable,
                     isEmphasized: isOpenProject && (expanded || !expandable),
+                    isFocused: isCursor(node),
                     onDisclosure: {
                         if isOpenProject { toggle(key) } else { open(project) }
                     },
@@ -467,7 +548,8 @@ struct ProjectSidebar: View {
                     projectSignals(project)
                 }
                 .background(dropHighlight(key), in: .rect(cornerRadius: 6))
-                .onTapGesture { open(project) }
+                .onTapGesture { select(node) }
+                .id(node)
                 .contextMenu { projectMenu(project) }
                 .draggable("project:\(project.uuid.uuidString)")
                 .dropDestination(for: String.self) { payloads, _ in
@@ -523,11 +605,13 @@ struct ProjectSidebar: View {
     private func viewRow(_ mode: BoardViewMode, of project: Project, depth: Int) -> some View {
         let selected = destination.projectID == project.uuid && viewMode.sidebarGroup == mode
         let running = terminalStore?.model(for: project.uuid).runningCount ?? 0
+        let node = SidebarNode.view(project.uuid, mode)
         return SidebarRow(
             depth: depth,
             height: Theme.Sidebar.viewRowHeight,
             disclosure: .placeholder,
             isSelected: selected,
+            isFocused: isCursor(node),
             title: mode.title
         ) {
             Image(systemName: mode.symbol)
@@ -546,10 +630,8 @@ struct ProjectSidebar: View {
                 EmptyView()
             }
         }
-        .onTapGesture {
-            destination = .project(project.uuid)
-            if viewMode.sidebarGroup != mode { viewMode = mode }
-        }
+        .onTapGesture { select(node) }
+        .id(node)
     }
 
     // MARK: - Footer
@@ -603,7 +685,7 @@ struct ProjectSidebar: View {
     private var settingsRow: some View {
         let selected = destination == .settings
         let services = [isMCPRunning ? "MCP" : nil, isSharing ? "Phone" : nil].compactMap { $0 }
-        return SidebarRow(isSelected: selected, title: "Settings") {
+        return SidebarRow(isSelected: selected, isFocused: isCursor(.destination(.settings)), title: "Settings") {
             Image(systemName: "slider.horizontal.3")
                 .font(.system(size: 13))
                 .foregroundStyle(selected ? AnyShapeStyle(.white) : AnyShapeStyle(.secondary))
@@ -620,7 +702,7 @@ struct ProjectSidebar: View {
                 .background((selected ? Color.white : Theme.running).opacity(0.16), in: .capsule)
             }
         }
-        .onTapGesture { destination = .settings }
+        .onTapGesture { select(.destination(.settings)) }
     }
 
     // MARK: - Menus
@@ -804,6 +886,315 @@ struct ProjectSidebar: View {
         closedRaw = keys.sorted().joined(separator: ",")
     }
 
+    // MARK: - Keyboard
+
+    /// Every visible row, in display order — the same walk `tree` and
+    /// `filterResults` draw, so ↓ always lands on the row below.
+    private var entries: [TreeEntry<SidebarNode>] {
+        var out: [TreeEntry<SidebarNode>] = []
+        let settings = TreeEntry(node: SidebarNode.destination(.settings), parent: nil, title: "Settings", isOpen: nil)
+
+        if isFiltering {
+            let groups = Dictionary(grouping: filterMatches) { location(of: $0) }
+            for path in groups.keys.sorted() {
+                for project in groups[path] ?? [] {
+                    out.append(TreeEntry(node: .project(project.uuid, inPinned: false), parent: nil,
+                                         title: title(of: project), isOpen: nil))
+                }
+            }
+            return out + [settings]
+        }
+
+        let smart: [(AppDestination, String)] = [
+            (.overview, "Overview"),
+            (.queue(.agents), CardQueue.agents.title),
+            (.queue(.review), CardQueue.review.title),
+            (.queue(.overdue), CardQueue.overdue.title),
+        ]
+        for (target, title) in smart {
+            out.append(TreeEntry(node: .destination(target), parent: nil, title: title, isOpen: nil))
+        }
+
+        if !pinned.isEmpty {
+            let section = SidebarNode.section("pinned")
+            let open = isOpen("pinned")
+            out.append(TreeEntry(node: section, parent: nil, title: "Pinned", isOpen: open))
+            if open {
+                for project in pinned {
+                    out.append(TreeEntry(node: .project(project.uuid, inPinned: true), parent: section,
+                                         title: title(of: project), isOpen: nil))
+                }
+            }
+        }
+
+        for workspace in workspaces {
+            let key = workspace.uuid.uuidString
+            let section = SidebarNode.section(key)
+            let open = isOpen(key)
+            out.append(TreeEntry(node: section, parent: nil, title: workspace.displayName, isOpen: open))
+            if open { appendContents(of: workspace, under: section, to: &out) }
+        }
+
+        if !unfiled.isEmpty {
+            var parent: SidebarNode?
+            if !workspaces.isEmpty {
+                let section = SidebarNode.section("unfiled")
+                out.append(TreeEntry(node: section, parent: nil, title: "No Folder", isOpen: isOpen("unfiled")))
+                parent = section
+            }
+            if workspaces.isEmpty || isOpen("unfiled") {
+                for project in unfiled { appendProject(project, under: parent, to: &out) }
+            }
+        }
+
+        if !archived.isEmpty {
+            let section = SidebarNode.section("archived")
+            let open = openedKeys.contains("archived")
+            out.append(TreeEntry(node: section, parent: nil, title: "Archived", isOpen: open))
+            if open {
+                for project in archived {
+                    out.append(TreeEntry(node: .project(project.uuid, inPinned: false), parent: section,
+                                         title: title(of: project), isOpen: nil))
+                }
+            }
+        }
+
+        return out + [settings]
+    }
+
+    private func appendContents(
+        of folder: ProjectFolder,
+        under parent: SidebarNode,
+        to out: inout [TreeEntry<SidebarNode>]
+    ) {
+        for child in folder.orderedChildren {
+            let node = SidebarNode.folder(child.uuid)
+            let open = isOpen(child.uuid.uuidString)
+            out.append(TreeEntry(node: node, parent: parent, title: child.displayName, isOpen: open))
+            if open { appendContents(of: child, under: node, to: &out) }
+        }
+        for project in folder.orderedProjects where project.status != .archived {
+            appendProject(project, under: parent, to: &out)
+        }
+    }
+
+    /// A project folds only while it is the open one — only the open project
+    /// lists its views — so any other project reads as closed, and → opens it.
+    private func appendProject(
+        _ project: Project,
+        under parent: SidebarNode?,
+        to out: inout [TreeEntry<SidebarNode>]
+    ) {
+        let node = SidebarNode.project(project.uuid, inPinned: false)
+        let isOpenProject = destination.projectID == project.uuid
+        let expanded = isOpenProject && isOpen("p:\(project.uuid.uuidString)")
+        out.append(TreeEntry(node: node, parent: parent, title: title(of: project), isOpen: expanded))
+        if expanded {
+            for mode in views(for: project) {
+                out.append(TreeEntry(node: .view(project.uuid, mode), parent: node, title: mode.title, isOpen: nil))
+            }
+        }
+    }
+
+    private func title(of project: Project) -> String {
+        project.name.isEmpty ? "Untitled Project" : project.name
+    }
+
+    private func isCursor(_ node: SidebarNode) -> Bool {
+        focus.wrappedValue == .sidebar && cursor == node
+    }
+
+    /// The row standing for what the detail pane shows: the view row when the
+    /// open project lists its views, else the project — in the tree before
+    /// Pinned, since the tree is where it lives.
+    private func selectedNode(in entries: [TreeEntry<SidebarNode>]) -> SidebarNode? {
+        guard let id = destination.projectID else { return .destination(destination) }
+        let candidates: [SidebarNode] = [
+            .view(id, viewMode.sidebarGroup),
+            .project(id, inPinned: false),
+            .project(id, inPinned: true),
+        ]
+        return candidates.first { candidate in entries.contains { $0.node == candidate } }
+    }
+
+    /// Keeps the cursor on the selection when something else changes it — a
+    /// card opened from Overview, ⌥⌘3 — but leaves it alone when it already
+    /// stands for that selection. That matters for Pinned: a project there
+    /// appears twice, and the cursor must not jump to the other copy.
+    private func followSelection() {
+        if let cursor, stands(for: cursor) { return }
+        guard cursor != nil else { return }
+        cursor = selectedNode(in: entries)
+    }
+
+    private func stands(for node: SidebarNode) -> Bool {
+        switch node {
+        case .destination(let target): destination == target
+        case .project(let id, _): destination.projectID == id
+        case .view(let id, let mode): destination.projectID == id && viewMode.sidebarGroup == mode
+        case .section, .folder: true
+        }
+    }
+
+    /// A click: the cursor goes there, the keyboard comes to the sidebar, and
+    /// the row opens.
+    private func select(_ node: SidebarNode) {
+        cursor = node
+        focus.wrappedValue = .sidebar
+        activate(node)
+    }
+
+    /// A click on a header or folder: cursor and keyboard, nothing opened.
+    private func place(_ node: SidebarNode) {
+        cursor = node
+        focus.wrappedValue = .sidebar
+    }
+
+    /// What landing on a row does. Selection follows the cursor, as in Mail
+    /// and Notes; folders and headers hold the cursor and change nothing.
+    private func activate(_ node: SidebarNode) {
+        switch node {
+        case .destination(let target):
+            destination = target
+        case .project(let id, _):
+            if destination.projectID != id, let project = projects.first(where: { $0.uuid == id }) {
+                open(project)
+            }
+        case .view(let id, let mode):
+            destination = .project(id)
+            if viewMode.sidebarGroup != mode { viewMode = mode }
+        case .section, .folder:
+            break
+        }
+    }
+
+    private func moveCursor(to node: SidebarNode?) {
+        guard let node else { return }
+        cursor = node
+        activate(node)
+    }
+
+    private var isBoardShowing: Bool {
+        destination.projectID != nil && viewMode == .board
+    }
+
+    private func handleKey(_ press: KeyPress) -> KeyPress.Result {
+        let list = entries
+        guard !list.isEmpty else { return .ignored }
+        if cursor == nil || !list.contains(where: { $0.node == cursor }) {
+            cursor = selectedNode(in: list)
+        }
+        let command = press.modifiers.contains(.command)
+
+        switch press.key {
+        case .downArrow:
+            moveCursor(to: command ? list.last?.node : TreeNavigation.step(list, from: cursor, by: 1))
+        case .upArrow:
+            moveCursor(to: command ? list.first?.node : TreeNavigation.step(list, from: cursor, by: -1))
+        case .home:
+            moveCursor(to: list.first?.node)
+        case .end:
+            moveCursor(to: list.last?.node)
+        case .pageDown:
+            moveCursor(to: TreeNavigation.step(list, from: cursor, by: 10))
+        case .pageUp:
+            moveCursor(to: TreeNavigation.step(list, from: cursor, by: -10))
+        case .rightArrow:
+            guard let cursor else { return .handled }
+            perform(TreeNavigation.right(list, from: cursor))
+        case .leftArrow:
+            guard let cursor else { return .handled }
+            perform(TreeNavigation.left(list, from: cursor))
+        case .return:
+            guard let cursor else { return .ignored }
+            switch cursor {
+            case .section, .folder:
+                withAnimation(.smooth(duration: 0.25)) { setFold(cursor, open: !(isOpenNode(cursor, in: list))) }
+            default:
+                activate(cursor)
+                // Return means "go in": the board, when that is what opened.
+                if isBoardShowing { focus.wrappedValue = .board }
+            }
+        case .space:
+            // Mid-name, a space is part of the name being typed.
+            if Date.now.timeIntervalSince(typeaheadAt) < 1 { return typeSelect(" ") }
+            guard let cursor else { return .ignored }
+            if let entry = list.first(where: { $0.node == cursor }), let open = entry.isOpen {
+                withAnimation(.smooth(duration: 0.25)) { open ? setFold(cursor, open: false) : expand(cursor) }
+            } else {
+                activate(cursor)
+            }
+        case .tab:
+            guard !press.modifiers.contains(.shift), isBoardShowing else { return .ignored }
+            focus.wrappedValue = .board
+        case .escape:
+            guard isFiltering else { return .ignored }
+            filterText = ""
+        default:
+            guard press.modifiers.isDisjoint(with: [.command, .control, .option]) else { return .ignored }
+            return typeSelect(press.characters)
+        }
+        return .handled
+    }
+
+    private func perform(_ action: TreeNavigation.Action<SidebarNode>) {
+        switch action {
+        case .moveTo(let node):
+            moveCursor(to: node)
+        case .open(let node):
+            withAnimation(.smooth(duration: 0.25)) { expand(node) }
+        case .close(let node):
+            withAnimation(.smooth(duration: 0.25)) { setFold(node, open: false) }
+        case .none:
+            break
+        }
+    }
+
+    /// Finder's type-to-select: letters typed within a second of each other
+    /// build one name.
+    private func typeSelect(_ typed: String) -> KeyPress.Result {
+        let allowed = CharacterSet.alphanumerics.union(.punctuationCharacters).union(.symbols)
+            .union(CharacterSet(charactersIn: " "))
+        guard !typed.isEmpty, typed.unicodeScalars.allSatisfy(allowed.contains) else { return .ignored }
+        let now = Date.now
+        typeahead = now.timeIntervalSince(typeaheadAt) < 1 ? typeahead + typed : typed
+        typeaheadAt = now
+        moveCursor(to: TreeNavigation.match(entries, prefix: typeahead, from: cursor))
+        return .handled
+    }
+
+    private func isOpenNode(_ node: SidebarNode, in list: [TreeEntry<SidebarNode>]) -> Bool {
+        list.first { $0.node == node }?.isOpen ?? false
+    }
+
+    /// Opens a row. A project that is not the open one is opened first, since
+    /// only the open project lists its views.
+    private func expand(_ node: SidebarNode) {
+        if case .project(let id, _) = node {
+            if destination.projectID != id, let project = projects.first(where: { $0.uuid == id }) {
+                open(project)
+            }
+            let key = "p:\(id.uuidString)"
+            if !isOpen(key) { toggle(key) }
+            return
+        }
+        setFold(node, open: true)
+    }
+
+    private func setFold(_ node: SidebarNode, open: Bool) {
+        let key: String
+        switch node {
+        case .section("archived"):
+            if openedKeys.contains("archived") != open { toggleOpened("archived") }
+            return
+        case .section(let section): key = section
+        case .folder(let id): key = id.uuidString
+        case .project(let id, _): key = "p:\(id.uuidString)"
+        case .destination, .view: return
+        }
+        if isOpen(key) != open { toggle(key) }
+    }
+
     // MARK: - Actions
 
     private func open(_ project: Project) {
@@ -893,6 +1284,19 @@ struct ProjectSidebar: View {
     }
 }
 
+/// One row the keyboard can stand on.
+enum SidebarNode: Hashable {
+    /// Overview, the smart lists, and Settings.
+    case destination(AppDestination)
+    /// A section header: Pinned, No Folder, Archived, or a workspace by UUID.
+    case section(String)
+    case folder(UUID)
+    /// A project appears twice when it is pinned — once in Pinned, once where
+    /// it lives — and the two are different rows.
+    case project(UUID, inPinned: Bool)
+    case view(UUID, BoardViewMode)
+}
+
 /// The name prompt shared by New Folder, New Workspace and Rename.
 enum FolderPrompt {
     /// `parent == nil` makes a workspace. `moving` is a project to file in the
@@ -941,8 +1345,9 @@ extension BoardViewMode {
 #Preview {
     @Previewable @State var destination: AppDestination = .overview
     @Previewable @State var mode: BoardViewMode = .board
+    @Previewable @FocusState var focus: FocusPane?
     NavigationSplitView {
-        ProjectSidebar(destination: $destination, viewMode: $mode)
+        ProjectSidebar(destination: $destination, viewMode: $mode, focus: $focus)
     } detail: {
         Text("Detail")
     }

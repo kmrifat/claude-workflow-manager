@@ -68,8 +68,9 @@ struct HelpGuideView: View {
 
     ## Cards
 
-    Click a card for a quick popover — retitle, change priority, open its issue.
-    Press **Edit Details** for the full editor.
+    Click a card to show it in the inspector on the right — retitle, move it,
+    tick subtasks, leave Claude a note. Press **Edit Details** for the full
+    editor.
 
     ### The editor
 
@@ -77,6 +78,25 @@ struct HelpGuideView: View {
       is the same renderer used for issue bodies and card popovers.
     - Set priority, owner, dates, tags, and a checklist of subtasks.
     - Link the card to a GitHub issue.
+
+    ## Keyboard
+
+    **Tab** moves from the sidebar into the board, **⇧Tab** moves back.
+
+    In the sidebar:
+
+    - **↑ ↓** move, and open what you land on. **⌘↑ ⌘↓** jump to the ends.
+    - **→** opens a folder, then steps into it. **←** closes it, then steps out.
+    - **Return** opens and moves into the board. **Space** folds and unfolds.
+    - Type a name to jump to it. **⇧⌘F** filters; **↓** from the filter goes
+      to the results.
+
+    On the board:
+
+    - **← → ↑ ↓** move between cards; the inspector follows.
+    - **⌘← ⌘→** move the card to the next column, **⌘↑ ⌘↓** reorder it. ⌘Z
+      undoes either.
+    - **Return** opens the full editor, **Esc** deselects, **⌘⌫** deletes.
 
     ## Dependencies
 

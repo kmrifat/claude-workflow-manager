@@ -45,6 +45,9 @@ struct SidebarRow<Icon: View, Accessory: View>: View {
     /// The open project: bold, on a faint fill, so it stays findable while one
     /// of its views holds the real selection.
     var isEmphasized: Bool = false
+    /// The keyboard cursor is on this row and the sidebar has focus. Drawn as
+    /// a ring so it reads on a folder, which never takes the selection.
+    var isFocused: Bool = false
     var onDisclosure: (() -> Void)?
     let title: String
     var subtitle: AnyView?
@@ -73,6 +76,9 @@ struct SidebarRow<Icon: View, Accessory: View>: View {
         .frame(minHeight: height)
         .foregroundStyle(isSelected ? AnyShapeStyle(.white) : AnyShapeStyle(.primary))
         .background(background, in: .rect(cornerRadius: 6))
+        .overlay {
+            if isFocused { SidebarFocusRing(onSelection: isSelected) }
+        }
         .contentShape(.rect)
     }
 
@@ -127,6 +133,7 @@ struct SidebarSectionHeader<Accessory: View>: View {
     var symbol: String?
     var count: Int?
     let isOpen: Bool
+    var isFocused: Bool = false
     var onToggle: () -> Void
     @ViewBuilder var accessory: () -> Accessory
 
@@ -155,11 +162,14 @@ struct SidebarSectionHeader<Accessory: View>: View {
                 Image(systemName: "chevron.right")
                     .font(.system(size: 9, weight: .bold))
                     .rotationEffect(.degrees(isOpen ? 90 : 0))
-                    .opacity(isOpen && !isHovered ? 0 : 1)
+                    .opacity(isOpen && !isHovered && !isFocused ? 0 : 1)
             }
             .foregroundStyle(.secondary)
             .padding(.horizontal, 8)
             .frame(height: Theme.Sidebar.headerHeight)
+            .overlay {
+                if isFocused { SidebarFocusRing(onSelection: false) }
+            }
             .contentShape(.rect)
         }
         .buttonStyle(.plain)
@@ -169,9 +179,32 @@ struct SidebarSectionHeader<Accessory: View>: View {
 }
 
 extension SidebarSectionHeader where Accessory == EmptyView {
-    init(title: String, symbol: String? = nil, count: Int? = nil, isOpen: Bool, onToggle: @escaping () -> Void) {
-        self.init(title: title, symbol: symbol, count: count, isOpen: isOpen, onToggle: onToggle,
-                  accessory: { EmptyView() })
+    init(
+        title: String,
+        symbol: String? = nil,
+        count: Int? = nil,
+        isOpen: Bool,
+        isFocused: Bool = false,
+        onToggle: @escaping () -> Void
+    ) {
+        self.init(title: title, symbol: symbol, count: count, isOpen: isOpen, isFocused: isFocused,
+                  onToggle: onToggle, accessory: { EmptyView() })
+    }
+}
+
+/// The keyboard cursor. On the selected row — accent-filled already — it is a
+/// light inner line, so the row still says "selected" first and "focused"
+/// second.
+struct SidebarFocusRing: View {
+    let onSelection: Bool
+
+    var body: some View {
+        RoundedRectangle(cornerRadius: 6)
+            .strokeBorder(
+                onSelection ? AnyShapeStyle(.white.opacity(0.55)) : AnyShapeStyle(Color.accentColor),
+                lineWidth: onSelection ? 1.5 : 2
+            )
+            .allowsHitTesting(false)
     }
 }
 

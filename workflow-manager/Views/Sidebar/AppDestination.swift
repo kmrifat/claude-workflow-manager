@@ -21,3 +21,13 @@ enum AppDestination: Hashable {
         return nil
     }
 }
+
+/// Which half of the window has the keyboard. Tab moves from the sidebar into
+/// the board, ⇧Tab moves back, and each side handles its own arrow keys.
+///
+/// One `@FocusState` in `ContentView` rather than one per view, because moving
+/// between the halves means one side has to hand focus to the other.
+enum FocusPane: Hashable {
+    case sidebar
+    case board
+}

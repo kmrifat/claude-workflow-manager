@@ -19,6 +19,8 @@ struct ContentView: View {
     @State private var viewMode: BoardViewMode = .board
     @State private var inspectedItemID: UUID?
     @State private var filter = BoardFilter()
+    /// Which half of the window has the keyboard; see `FocusPane`.
+    @FocusState private var focusedPane: FocusPane?
     /// Both live here, above the per-project detail view, so their state — open
     /// files, and running terminals — survives switching projects and tabs.
     @State private var filesStore = FilesStateStore()
@@ -57,6 +59,7 @@ struct ContentView: View {
             ProjectSidebar(
                 destination: $destination,
                 viewMode: $viewMode,
+                focus: $focusedPane,
                 isSharing: boardServer.state.isRunning,
                 isMCPRunning: mcpServer.state.isRunning
             )
@@ -149,7 +152,8 @@ struct ContentView: View {
                     project: selectedProject,
                     viewMode: $viewMode,
                     filter: $filter,
-                    inspectedItemID: $inspectedItemID
+                    inspectedItemID: $inspectedItemID,
+                    focus: $focusedPane
                 )
                 // Reset per-project view state when switching projects.
                 .id(selectedProject.uuid)

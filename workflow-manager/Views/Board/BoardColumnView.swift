@@ -20,6 +20,7 @@ struct BoardColumnView: View {
     @Binding var inspectedItemID: UUID?
     let filter: BoardFilter
     let accent: Color
+    var focus: FocusState<FocusPane?>.Binding
 
     @State private var hoveredCardID: UUID?
     @State private var dropsAfterHovered = false
@@ -214,6 +215,19 @@ struct BoardColumnView: View {
     }
 
     private var cardList: some View {
+        ScrollViewReader { proxy in
+            cardScroller
+                .onChange(of: inspectedItemID) { _, id in
+                    guard let id, column.orderedItems.contains(where: { $0.uuid == id }) else { return }
+                    // A done card picked by keyboard past the first few is
+                    // behind "Show more": open the list so it can be seen.
+                    if !visibleItems.contains(where: { $0.uuid == id }) { showsAllDone = true }
+                    withAnimation(.snappy(duration: 0.15)) { proxy.scrollTo(id) }
+                }
+        }
+    }
+
+    private var cardScroller: some View {
         ScrollView(.vertical) {
             // Not lazy: a lane holds a handful of cards, and `LazyVStack`
             // mis-estimated a queued card's extra height and opened the lane
@@ -221,6 +235,7 @@ struct BoardColumnView: View {
             VStack(spacing: column.isCompletionColumn ? 1 : 6) {
                 ForEach(visibleItems, id: \.uuid) { item in
                     card(for: item)
+                        .id(item.uuid)
                 }
 
                 let hidden = column.orderedItems.count - visibleItems.count
@@ -270,6 +285,7 @@ struct BoardColumnView: View {
         // click on the selected card closes it.
         .onTapGesture {
             inspectedItemID = (inspectedItemID == item.uuid) ? nil : item.uuid
+            focus.wrappedValue = .board
         }
         .draggable(WorkItemTransfer(itemID: item.uuid, sourceColumnID: column.uuid)) {
             WorkItemCardView(item: item, accent: accent, isCompact: column.isCompletionColumn)
