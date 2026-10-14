@@ -35,6 +35,10 @@ struct ClaudeWMApp: App {
         WindowGroup {
             ContentView()
         }
+        // Only the first window, before macOS has a saved frame to restore.
+        // Without it the window opens at the content's ideal size, which for a
+        // sidebar plus five lanes is a short strip that shows one card per lane.
+        .defaultSize(width: 1440, height: 900)
         .modelContainer(sharedModelContainer)
         .commands { WorkflowCommands() }
     }

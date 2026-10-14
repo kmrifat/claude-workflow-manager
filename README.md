@@ -21,7 +21,7 @@ GitHub auth is whatever `gh` already holds, and the app never sees a token.
 
 <p align="center">
   <img src="Docs/screenshot.png" width="960"
-       alt="The Board view: projects grouped in the sidebar, and a board with Backlog, To Do, In Progress, Review and Done columns">
+       alt="The Board view: projects in nested workspaces and folders in the sidebar, a board with Backlog, To Do, In Progress, Review and Done lanes, and the card Claude is working on open in the inspector">
 </p>
 
 ---
