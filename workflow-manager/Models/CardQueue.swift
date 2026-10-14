@@ -28,8 +28,13 @@ enum AgentState: Equatable, Sendable {
 extension WorkItem {
     /// The sync status this card's column reports, whether or not the project
     /// is syncing. `nil` only for a card detached from any column.
+    ///
+    /// A completion column is `done` whatever it inherits: a Done column with
+    /// no Claude status of its own sits right of Review and would otherwise
+    /// report every finished card as waiting for review.
     var boardStatus: WorkflowTasksFile.Status? {
         guard let column, let project = column.project else { return nil }
+        if column.isCompletionColumn { return .done }
         return project.status(for: column)
     }
 

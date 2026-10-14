@@ -29,19 +29,6 @@ struct BoardColumnView: View {
     @State private var isRenaming = false
     @State private var draftName = ""
     @FocusState private var nameFieldFocused: Bool
-    /// The card whose popover is open. A `UUID` rather than the model object,
-    /// for the same reason selection is elsewhere: a deleted `@Model` bound to a
-    /// presentation can crash on the next render, a stale UUID just stops
-    /// resolving.
-    @State private var popoverItemID: UUID?
-    /// Sheets the popover asks for. Hosted here rather than inside the popover:
-    /// on macOS a sheet presented from a popover is torn down with it when
-    /// focus moves.
-    @State private var creatingIssueForID: UUID?
-    @State private var linkingIssueForID: UUID?
-    /// Cached issues, read once per column to know which labels the repository
-    /// actually has. `gh issue create` fails outright on an unknown label.
-    @State private var repositoryLabels: [String] = []
     @State private var showsAllDone = false
 
     var body: some View {
@@ -70,41 +57,6 @@ struct BoardColumnView: View {
                 BoardMutations.append(dragged, to: column)
             }
         } isTargeted: { isColumnTargeted = $0 }
-        .task(id: column.project?.repoPath) {
-            guard let project = column.project, project.hasRepository else {
-                repositoryLabels = []
-                return
-            }
-            // From the cache only — opening a board must not spawn `gh`.
-            let issues = await IssueCache.load(for: project, in: context)?.issues ?? []
-            repositoryLabels = Set(issues.flatMap { $0.labels.map(\.name) }).sorted()
-        }
-        .sheet(isPresented: sheetBinding(for: $creatingIssueForID)) {
-            if let item = item(for: creatingIssueForID), let project = column.project {
-                CreateIssueSheet(
-                    item: item,
-                    project: project,
-                    availableLabels: repositoryLabels,
-                    onCreated: { created in
-                        IssueLinking.link(
-                            item,
-                            toIssueNumber: created.number,
-                            slug: project.repoSlug
-                        )
-                    }
-                )
-            }
-        }
-        .sheet(isPresented: sheetBinding(for: $linkingIssueForID)) {
-            if let item = item(for: linkingIssueForID), let project = column.project {
-                IssuePickerSheet(
-                    project: project,
-                    claimed: IssueLinking.linkedNumbers(in: project),
-                    currentSelection: item.githubIssueNumber,
-                    onPick: { IssueLinking.link(item, to: $0) }
-                )
-            }
-        }
     }
 
     // MARK: - Header
@@ -301,7 +253,7 @@ struct BoardColumnView: View {
     private func card(for item: WorkItem) -> some View {
         WorkItemCardView(
             item: item,
-            isSelected: inspectedItemID == item.uuid || popoverItemID == item.uuid,
+            isSelected: inspectedItemID == item.uuid,
             isDimmed: filter.isActive && !filter.matches(item),
             accent: accent,
             isCompact: column.isCompletionColumn
@@ -314,24 +266,10 @@ struct BoardColumnView: View {
                     .offset(y: dropsAfterHovered ? 5 : -5)
             }
         }
+        // Selects into the window's inspector (`CardInspector`); a second
+        // click on the selected card closes it.
         .onTapGesture {
-            popoverItemID = (popoverItemID == item.uuid) ? nil : item.uuid
-        }
-        .popover(
-            isPresented: popoverBinding(for: item),
-            attachmentAnchor: .rect(.bounds),
-            arrowEdge: .trailing
-        ) {
-            WorkItemPopover(
-                item: item,
-                accent: accent,
-                onEditDetails: { inspectedItemID = item.uuid },
-                onDelete: {
-                    withAnimation(.snappy) { context.delete(item) }
-                },
-                onCreateIssue: { creatingIssueForID = item.uuid },
-                onLinkIssue: { linkingIssueForID = item.uuid }
-            )
+            inspectedItemID = (inspectedItemID == item.uuid) ? nil : item.uuid
         }
         .draggable(WorkItemTransfer(itemID: item.uuid, sourceColumnID: column.uuid)) {
             WorkItemCardView(item: item, accent: accent, isCompact: column.isCompletionColumn)
@@ -358,7 +296,7 @@ struct BoardColumnView: View {
 
     @ViewBuilder
     private func cardMenu(for item: WorkItem) -> some View {
-        Button("Edit Details") { inspectedItemID = item.uuid }
+        Button("Show Details") { inspectedItemID = item.uuid }
 
         if let project = column.project {
             Menu("Move to") {
@@ -389,36 +327,11 @@ struct BoardColumnView: View {
 
         Button("Delete", role: .destructive) {
             if inspectedItemID == item.uuid { inspectedItemID = nil }
-            if popoverItemID == item.uuid { popoverItemID = nil }
             withAnimation(.snappy) { context.delete(item) }
         }
     }
 
     // MARK: - Helpers
-
-    /// Resolves a card id back to a live, undeleted item in this column.
-    private func item(for id: UUID?) -> WorkItem? {
-        guard let id else { return nil }
-        return column.orderedItems.first { $0.uuid == id }
-    }
-
-    /// Presents while an id is set, and clears it on dismissal.
-    private func sheetBinding(for id: Binding<UUID?>) -> Binding<Bool> {
-        Binding(
-            get: { id.wrappedValue != nil },
-            set: { if !$0 { id.wrappedValue = nil } }
-        )
-    }
-
-    private func popoverBinding(for item: WorkItem) -> Binding<Bool> {
-        Binding(
-            get: { popoverItemID == item.uuid },
-            set: { isShown in
-                if isShown { popoverItemID = item.uuid }
-                else if popoverItemID == item.uuid { popoverItemID = nil }
-            }
-        )
-    }
 
     /// Resolves the dragged item and applies `body`. Both failure modes are
     /// logged: a rejected drop is otherwise indistinguishable from nothing

@@ -38,11 +38,21 @@ struct ProjectDetailView: View {
         return project.allItems.first { $0.uuid == inspectedItemID }
     }
 
+    /// The inspector shows the selected card, on the views made of cards. On
+    /// Issues, Terminal and Files there is no card to show.
     private var inspectorPresented: Binding<Bool> {
         Binding(
-            get: { inspectedItem != nil },
+            get: { inspectedItem != nil && !viewMode.requiresRepository },
             set: { if !$0 { inspectedItemID = nil } }
         )
+    }
+
+    /// The full editor, opened from the inspector's "Edit Details…".
+    @State private var editingItemID: UUID?
+
+    private var editingItem: WorkItem? {
+        guard let editingItemID else { return nil }
+        return project.allItems.first { $0.uuid == editingItemID }
     }
 
     /// Under the title: the repository when there is one — it is what tells
@@ -70,12 +80,27 @@ struct ProjectDetailView: View {
             .navigationSubtitle(subtitle)
             .searchable(text: $filter.searchText, prompt: "Search cards")
             .toolbar { toolbarContent }
-            .sheet(isPresented: inspectorPresented) {
+            .inspector(isPresented: inspectorPresented) {
                 if let inspectedItem {
-                    WorkItemEditorSheet(
+                    CardInspector(
                         item: inspectedItem,
                         accent: project.accent.color,
+                        onEditDetails: { editingItemID = inspectedItem.uuid },
                         onClose: { inspectedItemID = nil }
+                    )
+                    .id(inspectedItem.uuid)
+                    .inspectorColumnWidth(min: 320, ideal: 380, max: 520)
+                }
+            }
+            .sheet(isPresented: Binding(
+                get: { editingItem != nil },
+                set: { if !$0 { editingItemID = nil } }
+            )) {
+                if let editingItem {
+                    WorkItemEditorSheet(
+                        item: editingItem,
+                        accent: project.accent.color,
+                        onClose: { editingItemID = nil }
                     )
                 }
             }

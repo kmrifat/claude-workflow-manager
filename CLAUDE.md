@@ -213,19 +213,24 @@ on its own); rendering and inline styling live in `Views/GitHub/`. Inline code
 needs an explicit background: SwiftUI makes it monospaced and nothing else, which
 in a body full of paths reads as random font switches.
 
-**Card detail is a popover on both boards**, anchored to the card, so the board
-stays visible behind it. A GitHub issue shows `GitHubIssueDetailSheet`
-(`presentation: .popover`, fixed size); a local card shows `WorkItemPopover`,
-which is a glance plus quick actions rather than a second editor —
-`WorkItemInspector` remains the long-form one, reached by "Edit Details" and
-still used by the list and timeline views.
+**A local card's detail is the window's inspector column** (`CardInspector`,
+SwiftUI `.inspector`), shown by selecting a card on Board, List or Timeline. It
+replaced the card popover, which covered the cards around the one it described
+and could not stay open while you worked — and with Claude reporting progress
+on a card, that progress belongs in view. It is a glance plus quick actions:
+`WorkItemEditorSheet` stays the long-form editor, behind "Edit Details…", so
+there are not two full editors to keep in step. Notes typed in its composer
+become `CardEvent`s by "You", which `get_card` hands to the agent.
 
-Two macOS constraints shape this. A `.sheet` is neither freely resizable nor
-dismissable by clicking away, which is why the panel mode of
-`GitHubIssueDetailSheet` still exists and owns its own size. And **a sheet
-presented from inside a popover is torn down with it** when focus moves — so
-"Create GitHub Issue…" and "Link to Existing Issue…" close the popover and ask
-`BoardColumnView` to present, rather than presenting themselves.
+Sheets ("Create GitHub Issue…", "Link to Existing Issue…") are presented from
+the inspector directly. A sheet presented from inside a *popover* is torn down
+with it when focus moves; an inspector is part of the window, so that
+constraint is gone.
+
+A GitHub issue still shows `GitHubIssueDetailSheet` as a popover
+(`presentation: .popover`, fixed size). A `.sheet` is neither freely resizable
+nor dismissable by clicking away, which is why its panel mode still exists and
+owns its own size.
 
 ## The app's sidebar and Overview
 

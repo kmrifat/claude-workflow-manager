@@ -161,6 +161,7 @@ final class MCPTools {
     3. Before starting a card, call claim_card. Then work.
     4. Record your branch with update_card. When you open a pull request, call update_card with status "review" and pr_url.
     5. Use set_subtask as you finish subtasks, and add_note for anything the user should read.
+    6. The user can leave you notes on a card; get_card returns them in its activity, by "You". Read them before you start and when you resume.
 
     Never move a card to "done" yourself unless the user asked; review is where your work stops.
     """

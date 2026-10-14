@@ -193,6 +193,10 @@ struct ContentView: View {
         if arguments.bool(forKey: "OpenSettings") {
             destination = .settings
         }
+        if let title = arguments.string(forKey: "InspectCard"),
+           let item = selectedProject?.allItems.first(where: { $0.title == title }) {
+            inspectedItemID = item.uuid
+        }
         #endif
     }
 
