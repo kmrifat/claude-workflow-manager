@@ -131,12 +131,17 @@ nonisolated enum CommandRunner {
     ///
     /// Synchronous, so a `@MainActor` caller reaches it without an isolation
     /// hop — `Process` is not `Sendable` and must not cross one.
+    ///
+    /// `environment` is added to the inherited one. It is how a secret reaches
+    /// a child — `cloudflared` reads its tunnel token from `TUNNEL_TOKEN` —
+    /// because arguments are visible to every user on the Mac through `ps`.
     @discardableResult
     static func spawn(
         executable: URL,
         arguments: [String],
         workingDirectory: URL? = nil,
-        standardOutput: URL? = nil
+        standardOutput: URL? = nil,
+        environment extra: [String: String] = [:]
     ) throws -> Process {
         let process = Process()
         process.executableURL = executable
@@ -146,6 +151,7 @@ nonisolated enum CommandRunner {
 
         var environment = ProcessInfo.processInfo.environment
         environment["PATH"] = searchPaths.joined(separator: ":")
+        environment.merge(extra) { _, new in new }
         process.environment = environment
 
         if let standardOutput {

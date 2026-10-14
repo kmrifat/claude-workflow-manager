@@ -108,11 +108,23 @@ final class MCPServer {
     private(set) var remoteState: State = .stopped
     private var remoteListener: HTTPListener?
 
+    /// The Cloudflare Tunnel's hostname, while the tunnel is up and carries
+    /// MCP. No listener of its own: `cloudflared` reaches the loopback one
+    /// through `TunnelGateway`, and this is only the name its requests carry.
+    private(set) var tunnelHost: String?
+
+    func setTunnel(host: String?) { tunnelHost = host?.lowercased() }
+
     var url: String { "http://\(Self.host):\(Self.port)/mcp" }
 
     /// What another Mac on the tailnet dials. Plain HTTP is not a lapse here:
     /// tailnet traffic is WireGuard-encrypted end to end.
+    ///
+    /// Through a Cloudflare Tunnel it is `https://`, and Cloudflare decrypts it
+    /// at its edge — the token and the board pass through Cloudflare readable.
+    /// Settings says so beside the switch.
     var remoteURL: String? {
+        if state.isRunning, let tunnelHost { return "https://\(tunnelHost)/mcp" }
         guard remoteState.isRunning, let node = remoteNode else { return nil }
         return "http://\(node.preferredHost):\(Self.port)/mcp"
     }
@@ -249,6 +261,11 @@ final class MCPServer {
         var names = ["\(Self.host):\(Self.port)", "localhost:\(Self.port)"]
         if remoteState.isRunning, let node = remoteNode {
             names += node.hostNames.map { "\($0.lowercased()):\(Self.port)" }
+        }
+        // `cloudflared` forwards the public hostname; through the gateway the
+        // request may also name the gateway itself.
+        if let tunnelHost {
+            names += [tunnelHost, "127.0.0.1:\(TunnelGateway.port)", "localhost:\(TunnelGateway.port)"]
         }
         return Set(names)
     }

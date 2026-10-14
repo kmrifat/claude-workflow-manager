@@ -31,6 +31,15 @@
 //  and cannot be taken on faith. `Tools/loopback.sh` runs a real handshake
 //  against a real client for exactly that reason.
 //
+//  ## Through a Cloudflare Tunnel
+//
+//  A second listener, `startRelay`, on 127.0.0.1:7422 — loopback only, for
+//  `cloudflared` via `TunnelGateway`. Cloudflare terminates TLS at its edge,
+//  so TLS-PSK cannot reach this far; instead every message on a relay
+//  connection is sealed with the pairing key (`SealedChannel`), and Cloudflare
+//  forwards ciphertext. Past the handshake the two listeners are the same
+//  server: the same clients, the same `hello`, the same handler.
+//
 //  ## Threading
 //
 //  Network.framework delivers on `queue`, and that is deliberately not the main
@@ -75,6 +84,21 @@ final class BoardServer {
 
     private var listener: NWListener?
     private var connections: [UUID: NWConnection] = [:]
+
+    /// The relay for Cloudflare Tunnel connections, and each relay
+    /// connection's sealing state. A connection with a link is sealed; one
+    /// without is the TLS-PSK listener's.
+    static let relayPort: UInt16 = 7422
+    private var relayListener: NWListener?
+    private var links: [UUID: RelayLink] = [:]
+    private(set) var isRelayRunning = false
+    /// The key `start` was given, which the relay seals with too.
+    private var pairingKey = Data()
+
+    /// The tunnel's public address, told to phones in `welcome` — a quick
+    /// tunnel's changes every start, and a phone that connects at home picks
+    /// up the new one there.
+    var relayURL: String?
     private let queue = DispatchQueue(label: "com.binarycastle.workflow-manager.board-server")
 
     // MARK: - Lifecycle
@@ -93,6 +117,7 @@ final class BoardServer {
             return
         }
         state = .starting
+        pairingKey = key
 
         let listener: NWListener
         do {
@@ -125,12 +150,55 @@ final class BoardServer {
     }
 
     func stop() {
+        stopRelay()
         for connection in connections.values { connection.cancel() }
         connections.removeAll()
+        links.removeAll()
         clients.removeAll()
         listener?.cancel()
         listener = nil
         state = .stopped
+    }
+
+    // MARK: - Relay
+
+    /// Starts the loopback relay a Cloudflare Tunnel forwards to. Only while
+    /// Phone Access itself is running: the relay is a second door into the
+    /// same server, not a server of its own.
+    func startRelay() {
+        guard relayListener == nil, state.isRunning, !pairingKey.isEmpty else { return }
+        let key = pairingKey
+
+        let parameters = NWParameters.tcp
+        parameters.allowLocalEndpointReuse = true
+        parameters.requiredLocalEndpoint = .hostPort(host: "127.0.0.1",
+                                                     port: NWEndpoint.Port(rawValue: Self.relayPort)!)
+        let websocket = NWProtocolWebSocket.Options()
+        websocket.autoReplyPing = true
+        parameters.defaultProtocolStack.applicationProtocols.insert(websocket, at: 0)
+
+        guard let relay = try? NWListener(using: parameters) else { return }
+        relay.newConnectionHandler = { [weak self] connection in
+            Task { @MainActor [weak self] in self?.accept(connection, link: RelayLink(pairingKey: key)) }
+        }
+        relay.stateUpdateHandler = { [weak self] newState in
+            Task { @MainActor [weak self] in
+                switch newState {
+                case .ready: self?.isRelayRunning = true
+                case .failed, .cancelled: self?.isRelayRunning = false
+                default: break
+                }
+            }
+        }
+        relayListener = relay
+        relay.start(queue: queue)
+    }
+
+    func stopRelay() {
+        relayListener?.cancel()
+        relayListener = nil
+        isRelayRunning = false
+        for id in links.keys { connections[id]?.cancel() }
     }
 
     private func listenerStateChanged(_ newState: NWListener.State) {
@@ -152,9 +220,10 @@ final class BoardServer {
 
     // MARK: - Connections
 
-    private func accept(_ connection: NWConnection) {
+    private func accept(_ connection: NWConnection, link: RelayLink? = nil) {
         let id = UUID()
         connections[id] = connection
+        if let link { links[id] = link }
         clients.append(Client(id: id, name: "Connecting…", connectedAt: .now, isReady: false))
 
         connection.stateUpdateHandler = { [weak self] newState in
@@ -166,12 +235,21 @@ final class BoardServer {
             }
         }
         connection.start(queue: queue)
-        receive(on: connection, id: id)
+        receive(on: connection, id: id, link: link)
+        if link != nil {
+            // A relay connection that never completes the handshake does not
+            // get to hold a socket open through somebody's tunnel.
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(for: .seconds(10))
+                if let self, let link = self.links[id], !link.isOpen { self.drop(id) }
+            }
+        }
     }
 
     private func drop(_ id: UUID) {
         connections[id]?.cancel()
         connections[id] = nil
+        links[id] = nil
         clients.removeAll { $0.id == id }
         handler?.clientDisconnected(id)
     }
@@ -197,7 +275,7 @@ final class BoardServer {
     // no reassembly to do — but there is also no backpressure if we queue
     // receives ahead of handling.
 
-    private nonisolated func receive(on connection: NWConnection, id: UUID) {
+    private nonisolated func receive(on connection: NWConnection, id: UUID, link: RelayLink?) {
         connection.receiveMessage { [weak self] data, context, isComplete, error in
             guard let self else { return }
             if error != nil {
@@ -226,12 +304,47 @@ final class BoardServer {
                 return
             }
             if let data, !data.isEmpty {
+                var frame = data
+                if let link {
+                    // Sealed: the first message is the handshake, every later
+                    // one must open with the session's key. Anything else —
+                    // a peer without the pairing key — is dropped before it
+                    // reaches a decoder.
+                    guard let opened = Self.relayReceive(data, link: link, on: connection) else {
+                        Task { @MainActor in self.drop(id) }
+                        return
+                    }
+                    guard let plaintext = opened else {
+                        self.receive(on: connection, id: id, link: link)
+                        return
+                    }
+                    frame = plaintext
+                }
                 // Decoded here, on the network queue, on purpose.
-                let decoded = Result { try WireCodec.decodeClientFrame(data) }
+                let decoded = Result { try WireCodec.decodeClientFrame(frame) }
                 Task { @MainActor in self.dispatch(decoded, from: id) }
             }
-            self.receive(on: connection, id: id)
+            self.receive(on: connection, id: id, link: link)
         }
+    }
+
+    /// One relay message in. Returns `.some(nil)` for the handshake (answered
+    /// here), `.some(plaintext)` for a sealed frame, and nil to drop the
+    /// connection.
+    private nonisolated static func relayReceive(_ data: Data, link: RelayLink, on connection: NWConnection) -> Data?? {
+        if let session = link.session {
+            guard let plaintext = try? session.open(data) else { return nil }
+            return .some(plaintext)
+        }
+        guard let clientNonce = try? SealedChannel.nonce(fromHandshake: data) else { return nil }
+        let serverNonce = SealedChannel.makeNonce()
+        link.session = SealedChannel.session(pairingKey: link.pairingKey, clientNonce: clientNonce,
+                                             serverNonce: serverNonce, isServer: true)
+        let metadata = NWProtocolWebSocket.Metadata(opcode: .binary)
+        connection.send(content: SealedChannel.handshake(nonce: serverNonce),
+                        contentContext: .init(identifier: "handshake", metadata: [metadata]),
+                        isComplete: true, completion: .contentProcessed { _ in })
+        return .some(nil)
     }
 
     private func dispatch(_ decoded: Result<ClientFrame, any Error>, from id: UUID) {
@@ -260,9 +373,17 @@ final class BoardServer {
     func send(_ message: ServerMessage, to id: UUID) {
         guard let connection = connections[id] else { return }
         let frame = ServerFrame(message: message)
-        guard let data = try? WireCodec.encode(frame) else { return }
+        guard var data = try? WireCodec.encode(frame) else { return }
 
-        let metadata = NWProtocolWebSocket.Metadata(opcode: .text)
+        var opcode = NWProtocolWebSocket.Opcode.text
+        if let link = links[id] {
+            // Nothing leaves a relay connection unsealed, and nothing leaves
+            // one before its handshake.
+            guard let session = link.session, let sealed = try? session.seal(data) else { return }
+            data = sealed
+            opcode = .binary
+        }
+        let metadata = NWProtocolWebSocket.Metadata(opcode: opcode)
         let context = NWConnection.ContentContext(identifier: "frame", metadata: [metadata])
         connection.send(
             content: data,
@@ -359,14 +480,15 @@ extension BoardServer {
         return pairingURL(tailnet: node)
     }
 
-    func pairingURL(tailnet node: Tailscale.Node?) -> URL? {
+    func pairingURL(tailnet node: Tailscale.Node?, relay: URL? = nil) -> URL? {
         let name = Self.defaultServiceName
         return try? BoardPairing.url(for: BoardPairing.Payload(
             key: BoardPairing.currentKey(),
             service: name,
             mac: name,
             host: node?.preferredHost,
-            port: node == nil ? nil : TailnetAccess.phonePort
+            port: node == nil ? nil : TailnetAccess.phonePort,
+            relay: relay?.absoluteString
         ))
     }
 
@@ -376,6 +498,23 @@ extension BoardServer {
         guard case .running(let port) = state else { return true }
         return node == nil ? port != TailnetAccess.phonePort : port == TailnetAccess.phonePort
     }
+}
+
+/// A relay connection's pairing key and, once the handshake is done, its
+/// session. Read on the network queue and the main actor both.
+private final class RelayLink: @unchecked Sendable {
+    let pairingKey: Data
+    private let lock = NSLock()
+    private var _session: SealedSession?
+
+    init(pairingKey: Data) { self.pairingKey = pairingKey }
+
+    var session: SealedSession? {
+        get { lock.withLock { _session } }
+        set { lock.withLock { _session = newValue } }
+    }
+
+    var isOpen: Bool { session != nil }
 }
 
 /// What the transport hands its owner. Deliberately not a closure: the service

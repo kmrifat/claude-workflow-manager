@@ -18,6 +18,11 @@
 //  Being on the tailnet is never enough by itself: a shared node or a guest
 //  device is on it too. Each service keeps the credential it already had.
 //
+//  It also holds the switches every route shares — on or off, which route,
+//  and what each exposes — because it held them before Cloudflare Tunnel was
+//  added as a second route (`CloudflareTunnel`), and the stored keys have kept
+//  their names so settings survive the change.
+//
 //  Tailscale's state is polled rather than observed — it has no notification
 //  API a sandbox-free app can subscribe to — every 30 s while this is on, and
 //  on demand when Settings opens.
@@ -38,6 +43,24 @@ final class TailnetAccess {
     private static let enabledKey = "tailnetAccessEnabled"
     private static let mcpKey = "tailnetExposesMCP"
     private static let phoneKey = "tailnetExposesPhone"
+    private static let routeKey = "remoteRoute"
+
+    /// How "away from home" is reached.
+    enum Route: String, CaseIterable, Identifiable {
+        case tailscale
+        case cloudflare
+        var id: String { rawValue }
+    }
+
+    var route: Route = Route(rawValue: UserDefaults.standard.string(forKey: TailnetAccess.routeKey) ?? "") ?? .tailscale {
+        didSet {
+            UserDefaults.standard.set(route.rawValue, forKey: Self.routeKey)
+            onChange?()
+        }
+    }
+
+    /// On, with the Cloudflare route chosen.
+    var usesCloudflare: Bool { isEnabled && route == .cloudflare }
 
     var isEnabled: Bool = UserDefaults.standard.bool(forKey: TailnetAccess.enabledKey) {
         didSet {
@@ -73,8 +96,8 @@ final class TailnetAccess {
 
     private init() {}
 
-    /// The node remote clients should reach: on, and connected.
-    var node: Tailscale.Node? { isEnabled ? status?.node : nil }
+    /// The node remote clients should reach: on, Tailscale chosen, connected.
+    var node: Tailscale.Node? { isEnabled && route == .tailscale ? status?.node : nil }
     var mcpNode: Tailscale.Node? { exposesMCP ? node : nil }
     var phoneNode: Tailscale.Node? { exposesPhone ? node : nil }
 

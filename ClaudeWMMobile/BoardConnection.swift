@@ -12,6 +12,13 @@
 //  are valid frames. Everything here is correlated on `MutationRequest.id` or
 //  matched by case — never by arrival order.
 //
+//  ## Sealed connections
+//
+//  Through a Cloudflare Tunnel the pairing key cannot be the TLS key —
+//  Cloudflare ends TLS — so the connection opens with a nonce exchange and then
+//  seals every message with keys derived from it (`SealedChannel`). Nothing,
+//  `hello` included, is sent until that exchange is done.
+//
 //  ## Reconnecting is the normal case, not the error case
 //
 //  A phone locks, loses Wi-Fi, and comes back. The Mac sleeps. Neither is
@@ -73,6 +80,14 @@ final class BoardConnection {
     private var connection: NWConnection?
     private var endpoint: NWEndpoint?
     private var key: Data?
+    /// Through a Cloudflare Tunnel: messages are sealed, see above.
+    private var isSealed = false
+    private var clientNonce: Data?
+    private let sealing = SealingState()
+
+    /// The Mac told us its tunnel address in `welcome`. The owner of the
+    /// pairing stores it, so the next dial from away uses the current one.
+    var onRelayAddress: ((String) -> Void)?
     private(set) var selectedProjectID: String?
 
     /// Mutations sent and not yet acked, by request id.
@@ -88,18 +103,23 @@ final class BoardConnection {
 
     // MARK: - Connecting
 
-    func connect(to endpoint: NWEndpoint, key: Data) {
+    /// - Parameter sealed: dialling through a Cloudflare Tunnel.
+    func connect(to endpoint: NWEndpoint, key: Data, sealed: Bool = false) {
         disconnect()
         self.endpoint = endpoint
         self.key = key
+        self.isSealed = sealed
         openConnection()
     }
 
     private func openConnection() {
         guard let endpoint, let key else { return }
         state = .connecting
+        sealing.session = nil
+        sealing.isActive = isSealed
 
-        let connection = NWConnection(to: endpoint, using: BoardTransport.parameters(key: key))
+        let parameters = isSealed ? BoardTransport.relayParameters() : BoardTransport.parameters(key: key)
+        let connection = NWConnection(to: endpoint, using: parameters)
         self.connection = connection
 
         connection.stateUpdateHandler = { [weak self] newState in
@@ -113,10 +133,14 @@ final class BoardConnection {
         switch newState {
         case .ready:
             reconnectAttempt = 0
-            send(.hello(
-                token: BoardPairingCode.helloToken(for: key ?? Data()),
-                clientName: DeviceName.current
-            ))
+            if isSealed {
+                // The handshake first; `hello` follows once it is answered.
+                let nonce = SealedChannel.makeNonce()
+                clientNonce = nonce
+                sendRaw(SealedChannel.handshake(nonce: nonce), opcode: .binary)
+            } else {
+                sendHello()
+            }
         case .failed(let error):
             // A wrong key fails here, in the TLS handshake, with `bad MAC`.
             // Worth naming, because "connection failed" sends people to check
@@ -133,6 +157,21 @@ final class BoardConnection {
         default:
             break
         }
+    }
+
+    private func sendHello() {
+        send(.hello(
+            token: BoardPairingCode.helloToken(for: key ?? Data()),
+            clientName: DeviceName.current
+        ))
+    }
+
+    /// The Mac's half of the handshake: derive the keys, then say hello.
+    private func completeHandshake(serverNonce: Data) {
+        guard let key, let clientNonce else { return }
+        sealing.session = SealedChannel.session(pairingKey: key, clientNonce: clientNonce,
+                                                serverNonce: serverNonce, isServer: false)
+        sendHello()
     }
 
     private func dropped(reason: String) {
@@ -208,8 +247,29 @@ final class BoardConnection {
                 return
             }
             if let data, !data.isEmpty {
+                var frame = data
+                if self.sealing.isActive {
+                    guard let session = self.sealing.session else {
+                        // Waiting for the Mac's handshake.
+                        guard let serverNonce = try? SealedChannel.nonce(fromHandshake: data) else {
+                            Task { @MainActor in self.dropped(reason: "The tunnel answered with something that isn’t your Mac.") }
+                            return
+                        }
+                        Task { @MainActor in self.completeHandshake(serverNonce: serverNonce) }
+                        self.receive(on: connection)
+                        return
+                    }
+                    guard let opened = try? session.open(data) else {
+                        // Only a Mac with this phone's pairing key can seal for it.
+                        Task { @MainActor in
+                            self.dropped(reason: "This phone is no longer paired with that Mac. Scan a new code.")
+                        }
+                        return
+                    }
+                    frame = opened
+                }
                 // Decoded off the main actor; only the value crosses over.
-                let decoded = try? WireCodec.decodeServerFrame(data)
+                let decoded = try? WireCodec.decodeServerFrame(frame)
                 if let decoded {
                     Task { @MainActor in self.handle(decoded) }
                 }
@@ -225,8 +285,9 @@ final class BoardConnection {
         }
 
         switch frame.message {
-        case .welcome(let serverName):
+        case .welcome(let serverName, let relayURL):
             state = .connected(serverName: serverName)
+            if let relayURL { onRelayAddress?(relayURL) }
             // Sets the delegate and asks for permission now that there is a Mac
             // on the other end — see `PhoneNotifier.prepare()`.
             PhoneNotifier.shared.prepare()
@@ -393,8 +454,20 @@ final class BoardConnection {
     }
 
     private func send(_ message: ClientMessage) {
-        guard let connection, let data = try? WireCodec.encode(ClientFrame(message: message)) else { return }
-        let metadata = NWProtocolWebSocket.Metadata(opcode: .text)
+        guard let data = try? WireCodec.encode(ClientFrame(message: message)) else { return }
+        if isSealed {
+            // Nothing goes out unsealed through a tunnel, and nothing before
+            // the handshake.
+            guard let session = sealing.session, let sealed = try? session.seal(data) else { return }
+            sendRaw(sealed, opcode: .binary)
+        } else {
+            sendRaw(data, opcode: .text)
+        }
+    }
+
+    private func sendRaw(_ data: Data, opcode: NWProtocolWebSocket.Opcode) {
+        guard let connection else { return }
+        let metadata = NWProtocolWebSocket.Metadata(opcode: opcode)
         connection.send(
             content: data,
             contentContext: .init(identifier: "frame", metadata: [metadata]),
@@ -488,5 +561,23 @@ final class BoardConnection {
             change(&snapshot.columns[columnIndex].cards[cardIndex])
             return
         }
+    }
+}
+
+/// A sealed connection's session, read on the network queue and set on the
+/// main actor.
+private final class SealingState: @unchecked Sendable {
+    private let lock = NSLock()
+    private var _session: SealedSession?
+    private var _isActive = false
+
+    var session: SealedSession? {
+        get { lock.withLock { _session } }
+        set { lock.withLock { _session = newValue } }
+    }
+
+    var isActive: Bool {
+        get { lock.withLock { _isActive } }
+        set { lock.withLock { _isActive = newValue } }
     }
 }

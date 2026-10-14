@@ -146,6 +146,10 @@ nonisolated enum BoardPairing {
         /// protocol version bump, and old codes still pair.
         var host: String?
         var port: UInt16?
+        /// The Cloudflare Tunnel's address (`https://…`), when that route is
+        /// on: tried after Bonjour and the tailnet. Optional for the same
+        /// reason as `host`.
+        var relay: String?
 
         init(
             version: Int = WireProtocol.version,
@@ -153,7 +157,8 @@ nonisolated enum BoardPairing {
             service: String,
             mac: String,
             host: String? = nil,
-            port: UInt16? = nil
+            port: UInt16? = nil,
+            relay: String? = nil
         ) {
             self.version = version
             self.key = key
@@ -161,6 +166,7 @@ nonisolated enum BoardPairing {
             self.mac = mac
             self.host = host
             self.port = port
+            self.relay = relay
         }
     }
 

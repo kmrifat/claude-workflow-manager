@@ -126,7 +126,8 @@ struct BoardSharingView: View {
             // Built live rather than kept from `start()`: reopening this sheet
             // while serving, or remote access changing, must show the code that
             // is true now.
-            if let pairingURL = server.pairingURL(tailnet: TailnetAccess.shared.phoneNode),
+            if let pairingURL = server.pairingURL(tailnet: TailnetAccess.shared.phoneNode,
+                                                  relay: server.relayURL.flatMap(URL.init(string:))),
                let image = BoardPairing.qrCode(for: pairingURL) {
                 HStack {
                     Spacer()

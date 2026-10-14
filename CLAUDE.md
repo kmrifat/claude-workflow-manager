@@ -397,6 +397,48 @@ over Cloudflare Tunnel, which needs a domain. Off by default; Settings › Remot
 - Plain HTTP for MCP over the tailnet is deliberate: WireGuard encrypts it end
   to end.
 
+### Cloudflare Tunnel, the second route
+
+Added at the owner's request for when a device cannot run Tailscale. Chosen in
+Settings › Remote (`TailnetAccess.route` — the type kept its name and stored
+keys, and now holds the switches both routes share). `cloudflared` runs on this
+Mac; nothing is installed on the phone, and Pitwall creates nothing in the
+Cloudflare account.
+
+- **Two modes** (`CloudflareTunnel.Mode`). *Quick*: `cloudflared tunnel --url`,
+  no account, a random `trycloudflare.com` address per start. *Your domain*: a
+  tunnel made in Cloudflare's dashboard, run with its token, whose public
+  hostname points at `http://localhost:7423`. The token is a credential: it is
+  kept in the Keychain and handed over as `TUNNEL_TOKEN` in the environment,
+  never as an argument, because `ps` shows arguments to every user.
+- **One origin, `TunnelGateway` on 127.0.0.1:7423**, which splices `/mcp` to
+  the MCP server and `/board` to the Phone Access relay. It rewrites every
+  ordinary request to `Connection: close`: `cloudflared` pools origin
+  connections, the gateway routes once per connection, and a pooled one first
+  used for `/mcp` would otherwise carry a phone's WebSocket to the wrong place.
+- **Cloudflare ends TLS, so Phone Access is sealed end to end** —
+  `SealedChannel` in `ClaudeWMWire` (CryptoKit, no I/O): a nonce exchange,
+  HKDF from the pairing key into one key per direction, ChaCha20-Poly1305
+  with a counter nonce. The relay (`BoardServer.startRelay`, 127.0.0.1:7422)
+  drops a connection on its first message that will not open, so a peer
+  without the key never reaches a decoder — the promise TLS-PSK makes on the
+  LAN. Replays, reordering and reflection all fail; Wire tests cover each.
+- **The MCP server is *not* sealed through a tunnel.** It is HTTP behind its
+  bearer token, and Cloudflare can read it — token included. Settings says so
+  beside the switch. Its `Host` check accepts the tunnel hostname only while
+  the tunnel carries MCP.
+- **A quick tunnel's address moves, so the phone is told it.** `welcome`
+  carries `relayURL`, and a phone that connects at home stores the new one.
+  A new quick hostname took about a minute and a half to resolve in a live
+  test, though `cloudflared` reports it at once — the phone's retry covers it.
+- `cloudflared` stops when Pitwall quits, and one left by a crash is killed at
+  the next start — only if that pid really is `cloudflared`.
+- `Tools/loopback.sh` drives a sealed phone through the gateway and relay,
+  checks a wrong key and an unsealed client are dropped, and that `/mcp` is
+  spliced with `Connection: close`. `LOOPBACK_CLOUDFLARE=1` adds a live quick
+  tunnel and dials it over real TLS — opt-in, since it puts the Mac on a
+  public address while it runs.
+
 ## The app's Terminal and Files views
 
 Two more `BoardViewMode` cases, both requiring a linked repository

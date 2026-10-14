@@ -29,7 +29,17 @@ struct BoardScreen: View {
                 .toolbar { toolbar }
                 .safeAreaInset(edge: .top, spacing: 0) { statusBar }
         }
-        .task(id: paired?.service) { connect() }
+        .task(id: paired?.service) {
+            connection.onRelayAddress = { address in
+                // A quick tunnel's address changes when the Mac restarts; the
+                // Mac says the current one on every connect.
+                guard var updated = paired, updated.relayURL != address else { return }
+                updated.relayURL = address
+                PairedMacStore.save(updated)
+                paired = updated
+            }
+            connect()
+        }
         .onChange(of: PushRegistration.shared.token) { _, _ in
             // Apple answers asynchronously, usually after the socket is already
             // up, so the token is sent when it arrives rather than at connect.
@@ -79,8 +89,8 @@ struct BoardScreen: View {
             // connection" would be useless here: the usual answer is that the
             // Mac is asleep.
             Text("""
-                Make sure \(paired?.macName ?? "your Mac") is awake, on this Wi-Fi network, \
-                and has Phone Access turned on.
+                Make sure \(paired?.macName ?? "your Mac") is awake and has Phone Access \
+                turned on — and, away from this Wi-Fi, that it has Access from Anywhere on.
                 """)
         } actions: {
             Button("Try Again") { connect() }
@@ -167,6 +177,10 @@ struct BoardScreen: View {
     /// once Bonjour sees the Mac again — dropping a working socket to switch
     /// routes would cost more than the route saves; if the tailnet dial never
     /// connected, `onChange(of: browser.found)` retries through Bonjour.
+    ///
+    /// Last, the Mac's Cloudflare Tunnel, if it offered one: nothing to install
+    /// on the phone, and sealed with the pairing key so Cloudflare only
+    /// forwards it.
     private func connect() {
         guard let paired else { return }
         if let endpoint = browser.endpoint(named: paired.service) {
@@ -174,6 +188,8 @@ struct BoardScreen: View {
         } else if let host = paired.remoteHost, let port = paired.remotePort,
                   let endpoint = BoardTransport.remoteEndpoint(host: host, port: port) {
             connection.connect(to: endpoint, key: paired.key)
+        } else if let relay = paired.relayURL, let endpoint = BoardTransport.relayEndpoint(relay) {
+            connection.connect(to: endpoint, key: paired.key, sealed: true)
         }
     }
 }
