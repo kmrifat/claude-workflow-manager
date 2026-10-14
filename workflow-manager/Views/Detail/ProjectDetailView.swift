@@ -198,7 +198,9 @@ struct ProjectDetailView: View {
                 .foregroundStyle(Theme.agentText)
                 .help(filter.scope == .claude ? "Show every card" : "Show only cards with Claude")
             }
-            ToolbarSpacer(.fixed)
+            if #available(macOS 26, *) {
+                ToolbarSpacer(.fixed)
+            }
         }
 
         if !viewMode.requiresRepository {

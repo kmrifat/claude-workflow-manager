@@ -492,7 +492,22 @@ cannot run `claude` from an nvm path. Deleting the terminal would change
 nothing; Issues, Files, the git reader and the Claude integration are all built
 the same way.
 
-Two details the script encodes:
+**The app runs from macOS 14 Sonoma, on Intel and Apple Silicon.** It is
+designed on macOS 26, but every Intel Mac from 2018 on can reach Sonoma and
+most stop at Sequoia (the 2019 MacBook Air at Sonoma), so a 26.5 floor locked
+all of them out. Anything newer than 14 goes behind `#available` — in
+`Support/Compatibility.swift` or at the call site (`ToolbarSpacer` is the
+macOS 26 one) — and falls back to plain system behaviour, never to a look of
+our own. Do not raise the deployment target to reach a new API; gate it. The
+check that keeps this honest is a build with `MACOSX_DEPLOYMENT_TARGET=14.0`
+`ARCHS="arm64 x86_64"`: it fails on any ungated API. `ClaudeWMWire` is on
+`.macOS(.v14)` for the same reason.
+
+Three details the script encodes:
+
+- **The app is universal.** `ARCHS="arm64 x86_64"` is passed explicitly and
+  checked with `lipo` after export: an arm64-only build fails on an Intel Mac
+  with nothing more helpful than "not supported on this Mac".
 
 - **Notarization needs the Hardened Runtime, and that is all it needs.** It is
   already on for both configurations. Spawning children is allowed under it; the

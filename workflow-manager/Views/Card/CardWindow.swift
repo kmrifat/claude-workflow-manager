@@ -152,7 +152,7 @@ struct CardPage: View {
         // The title is the page's first line; the toolbar repeating it, as
         // Notes does not, would put it on screen twice. The window keeps it
         // for the Window menu and Mission Control.
-        .toolbar(removing: .title)
+        .hidingToolbarTitle()
         .toolbar { toolbar }
         .frame(minWidth: 560, minHeight: 420)
         .task {
@@ -382,7 +382,9 @@ struct CardPage: View {
             .help("Code block (⌥⌘C)")
         }
 
-        ToolbarSpacer(.fixed)
+        if #available(macOS 26, *) {
+            ToolbarSpacer(.fixed)
+        }
 
         ToolbarItem { claudeButton }
 
