@@ -7,6 +7,11 @@
 //  `.secondary`, `.background`, `Color.accentColor`) so light and dark both
 //  come from macOS rather than from us.
 //
+//  The accent is Pitwall's orange-red, the icon's leader bar, and lives in the
+//  `AccentColor` asset (both targets) so system controls pick it up too. Its
+//  light variant is a shade deeper — #D63D0E against the icon's #FF4F1F — so
+//  white text on a selected row clears 4.5:1 on a light window.
+//
 //  The values are the ones in design/ClaudeWM.fig, which shares DevVault's
 //  palette. Each has a light and a dark variant because the dark tints are too
 //  pale to read on white.
