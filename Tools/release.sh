@@ -141,9 +141,16 @@ xcodebuild archive \
     ONLY_ACTIVE_ARCH=NO \
     "${SIGN_ARGS[@]}" \
     ${VERSION_ARGS[@]+"${VERSION_ARGS[@]}"} \
-    | grep -E '^(\*\*|error:|warning: .*deprecat)' || true
+    > "$OUT/archive.log" 2>&1 || true
+grep -E '^\*\*' "$OUT/archive.log" || true
 
-[ -d "$ARCHIVE" ] || die "Archive failed."
+# A compiler error begins with the file's path, not with "error:", so a filter
+# anchored to the start of the line showed none of them — a failed archive
+# then said only "ARCHIVE FAILED". The whole log is kept beside the archive.
+if [ ! -d "$ARCHIVE" ]; then
+    grep -E 'error:' "$OUT/archive.log" | sort -u | head -40 >&2 || true
+    die "Archive failed. Full log: $OUT/archive.log"
+fi
 
 # --- Export ----------------------------------------------------------------
 #

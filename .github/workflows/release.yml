@@ -74,8 +74,17 @@ jobs:
           echo "marketing=$MARKETING" >> "$GITHUB_OUTPUT"
           echo "Building $VERSION (marketing $MARKETING, build ${{ github.run_number }})"
 
-      - name: Show Xcode
-        run: xcodebuild -version
+      # The newest Xcode on the image, preferring 27 — what the app is built
+      # with day to day. The image's default was 26.6, which could not compile
+      # it. Listed first, so a log says which one was used.
+      - name: Choose Xcode
+        run: |
+          find /Applications -maxdepth 1 -name 'Xcode*.app' | sort -V
+          XCODE=$(find /Applications -maxdepth 1 -name 'Xcode_27*.app' | sort -V | tail -1)
+          [ -n "$XCODE" ] || XCODE=$(find /Applications -maxdepth 1 -name 'Xcode_*.app' | sort -V | tail -1)
+          echo "Using $XCODE"
+          sudo xcode-select -s "$XCODE/Contents/Developer"
+          xcodebuild -version
 
       - name: Import the Developer ID certificate
         if: env.HAS_DEVELOPER_ID == 'true'
@@ -132,6 +141,14 @@ jobs:
           (cd "$(dirname "$DMG")" && shasum -a 256 "$(basename "$DMG")" > "$(basename "$DMG").sha256")
           echo "path=$DMG" >> "$GITHUB_OUTPUT"
           cat "$DMG.sha256"
+
+      - name: Keep the build log if it failed
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log
+          path: .xcbuild/release/archive.log
+          if-no-files-found: ignore
 
       - name: Keep the DMG as an artifact
         uses: actions/upload-artifact@v4
