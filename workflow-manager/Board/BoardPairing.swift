@@ -140,12 +140,27 @@ nonisolated enum BoardPairing {
         var key: Data
         var service: String
         var mac: String
+        /// The Mac's tailnet name and the fixed port, when remote access is on:
+        /// where a phone off the Wi-Fi dials, since Bonjour cannot reach it.
+        /// Optional, so phones that predate it simply ignore the keys — no
+        /// protocol version bump, and old codes still pair.
+        var host: String?
+        var port: UInt16?
 
-        init(version: Int = WireProtocol.version, key: Data, service: String, mac: String) {
+        init(
+            version: Int = WireProtocol.version,
+            key: Data,
+            service: String,
+            mac: String,
+            host: String? = nil,
+            port: UInt16? = nil
+        ) {
             self.version = version
             self.key = key
             self.service = service
             self.mac = mac
+            self.host = host
+            self.port = port
         }
     }
 

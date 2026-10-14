@@ -33,6 +33,7 @@ struct WorkItemPopover: View {
     @Environment(\.modelContext) private var context
     @Environment(\.dismiss) private var dismiss
     @Environment(WorkflowSyncModel.self) private var sync: WorkflowSyncModel?
+    @Environment(MCPServer.self) private var mcp: MCPServer?
 
     private var project: Project? { item.project }
 
@@ -73,9 +74,11 @@ struct WorkItemPopover: View {
                         githubSection(for: project)
                     }
 
-                    if let project, project.isSyncing, let sync {
+                    // Two ways a card reaches Claude: the `tasks.json` file on a
+                    // syncing board, or the MCP server, which serves them all.
+                    if let project, project.isSyncing || mcp?.isEnabled == true {
                         Divider()
-                        claudeSection(for: project, sync: sync)
+                        claudeSection(for: project)
                     }
                 }
                 .padding(14)
@@ -213,7 +216,7 @@ struct WorkItemPopover: View {
     }
 
     @ViewBuilder
-    private func claudeSection(for project: Project, sync: WorkflowSyncModel) -> some View {
+    private func claudeSection(for project: Project) -> some View {
         VStack(alignment: .leading, spacing: 6) {
             Text("CLAUDE")
                 .font(.system(size: 9, weight: .semibold))
@@ -225,17 +228,26 @@ struct WorkItemPopover: View {
                     .foregroundStyle(.secondary)
                 Button("Cancel Request") {
                     item.workflowRequested = false
-                    Task { await sync.writeNow(for: project, context: context) }
+                    writeTasksFile(for: project)
                 }
                 .font(.system(size: 11))
                 .buttonStyle(.link)
             } else {
                 Button("Send to Claude") {
                     item.workflowRequested = true
-                    Task { await sync.writeNow(for: project, context: context) }
+                    writeTasksFile(for: project)
                 }
                 .font(.system(size: 11))
                 .buttonStyle(.link)
+                // The same rule the phone and MCP enforce on the Mac's side.
+                .disabled(item.isBlocked)
+            }
+
+            if let claimed = item.agentClaimedAt, let name = item.agentName {
+                Label("\(name) · claimed \(claimed.formatted(.relative(presentation: .named)))",
+                      systemImage: "sparkles")
+                    .font(.system(size: 11))
+                    .foregroundStyle(Theme.agentText)
             }
 
             if let branch = item.workflowBranch {
@@ -249,8 +261,42 @@ struct WorkItemPopover: View {
                         .font(.system(size: 11))
                 }
             }
+
+            let events = item.events
+                .filter { !$0.isDeleted }
+                .sorted { $0.date > $1.date }
+                .prefix(4)
+            if !events.isEmpty {
+                VStack(alignment: .leading, spacing: 5) {
+                    ForEach(Array(events), id: \.uuid) { event in
+                        HStack(alignment: .firstTextBaseline, spacing: 6) {
+                            Circle().fill(Theme.agent).frame(width: 5, height: 5)
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text(event.summary).font(.system(size: 11))
+                                if let note = event.note {
+                                    Text(note)
+                                        .font(.system(size: 11))
+                                        .foregroundStyle(.secondary)
+                                        .lineLimit(3)
+                                }
+                                Text("\(event.tool ?? event.actor) · \(event.date.formatted(.relative(presentation: .named)))")
+                                    .font(.system(size: 10, design: .monospaced))
+                                    .foregroundStyle(.tertiary)
+                            }
+                        }
+                    }
+                }
+                .padding(.top, 2)
+            }
         }
         .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// Only a syncing board has a `tasks.json` to rewrite; over MCP the agent
+    /// reads the request straight from the board.
+    private func writeTasksFile(for project: Project) {
+        guard project.isSyncing, let sync else { return }
+        Task { await sync.writeNow(for: project, context: context) }
     }
 
     private var footer: some View {

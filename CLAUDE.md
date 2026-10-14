@@ -227,6 +227,108 @@ presented from inside a popover is torn down with it** when focus moves — so
 "Create GitHub Issue…" and "Link to Existing Issue…" close the popover and ask
 `BoardColumnView` to present, rather than presenting themselves.
 
+## The app's sidebar and Overview
+
+The redesign lives in `design/ClaudeWM.fig` (OpenPencil; PNGs in
+`design/redesign/`). Build against those frames, not against memory of the old
+UI. The folder is **git-ignored on purpose**: the frames are drawn over the real
+board and carry client project names, and this repository is public.
+
+The sidebar is a tree: **workspace › folder › … › project › view**. One model,
+`ProjectFolder`, covers both levels — a folder with no `parent` *is* a
+workspace — so `Project` needs one optional `folder` and nothing has to keep
+two relationships mutually exclusive. All tree changes go through
+`SidebarMutations`, which holds the two invariants: deleting a folder re-homes
+its projects and subfolders one level up (it never deletes a project), and a
+folder cannot move into its own descendant.
+
+`Project.groupName` is the old flat grouping. `adoptLegacyGroups` turns each
+name into a workspace at launch and clears it, with undo disabled and the save
+inside that window. Nothing else reads it; it stays only so old stores open.
+
+Folds are in `UserDefaults` (`sidebar.closed`, `sidebar.opened`), not
+SwiftData: a fold is a viewing state, and a store write would put it on the
+undo stack and wake the board sync. Only the open project expands to show its
+views — with dozens of projects, a tree where every project shows four children
+cannot be scanned.
+
+The smart lists (Agents Working, Needs Review, Overdue) and the Overview are
+derived from the boards through `CardQueue` / `WorkItem.agentState`; there is no
+event log. A card is "with Claude" when it was sent (`workflowRequested`) on a
+syncing project, and its column's status says how far the agent got.
+
+Debug builds accept `-UseSampleData`, which swaps in the in-memory
+`SampleData` store, plus `-OpenProject <name>`, `-ViewMode <mode>` and
+`-OpenQueue <queue>`. Use them to launch and screenshot a dev build — **never
+point a dev build at the real store**: the first launch migrates its groups.
+
+## The app's MCP server
+
+`MCP/` serves the boards as MCP tools at `http://127.0.0.1:7420/mcp`, the
+replacement for agents editing `.taskboard/tasks.json`. Both paths coexist: a
+project that syncs its file keeps doing so, and the file simply reflects what
+MCP changed (`tools.didMutate` reaches `WorkflowSyncCoordinator.boardChanged`,
+the single publisher). Off by default, switched on in Settings.
+
+- **Hand-written HTTP/1.1, on purpose** (`HTTPListener`). Vapor is not allowed
+  in this target, and MCP's Streamable HTTP is a POST per message, so the
+  WebSocket trick Phone Access uses does not apply. The subset is small and
+  everything outside it is refused: no chunked bodies, one request at a time
+  per connection, hard size limits. Every POST is answered with one JSON body;
+  GET is 405 — the spec allows both, and nothing here needs to push.
+- **Three checks before any JSON is read**: `Host` must be the loopback
+  address (the spec's DNS-rebinding defence), `Origin` if present must be
+  local, and a bearer token from `MCPToken` (Keychain, minted by the app). Bound
+  to `127.0.0.1` exactly, so it is not on the network at all.
+- **The connect command uses `--scope user`.** It carries the token, and the
+  `.mcp.json` alternative would put that token in a file that gets committed.
+- **The tool vocabulary is the field ownership.** Agents report status,
+  branch and PR, check subtasks and add notes; there is no tool to rename,
+  rewrite, reprioritise, create or delete a card — stronger than a tool that
+  refuses. Rules are enforced in `MCPTools`, not trusted to the client: a
+  blocked card cannot be claimed, and a status with no column carrying it is an
+  error rather than a silent no-op.
+- **Tools validate before they mutate, and never `rollback()`.** Rollback
+  discards *every* unsaved change in the shared context, the user's included.
+  Mutation and save happen inside one undo-disabled window, as everywhere else.
+- Tool failures are results with `isError: true`, not JSON-RPC errors — the
+  model is meant to read them.
+- Each change writes a `CardEvent` (actor, tool, summary, optional note). It is
+  a record nothing reads back to decide anything.
+- `-UseSampleData` keeps the token in memory (`cwm_sample_data_only`) so a dev
+  build never mints a Keychain item; pass `-mcpServerEnabled YES` to start it.
+  Verified against a real `claude -p --mcp-config` run, not just curl.
+
+## Remote access (Tailscale)
+
+`Remote/` makes Claude WM usable away from home over the user's own tailnet —
+chosen over a relay, which would be the shared backend this repo refuses, and
+over Cloudflare Tunnel, which needs a domain. Off by default; Settings › Remote.
+
+- **Read-only towards Tailscale.** No `tailscale serve`, no certificates, no
+  ACL changes: the app only listens on the address Tailscale already gave it,
+  so switching it off undoes everything. Detection reads the interfaces for a
+  `utun` address in 100.64.0.0/10 (no spawn) and, if the CLI exists, `tailscale
+  status --json` for the MagicDNS name. `Tailscale.parse` is pure and tested.
+- **Bind to the tailnet address, never 0.0.0.0.** The MCP server gets a second
+  `HTTPListener` on exactly that address and accepts its names in `Host`;
+  loopback is untouched. Phone Access moves to the fixed port
+  `TailnetAccess.phonePort` (7421) so a code can name it.
+- **The tailnet is not the credential.** A shared node or a guest device is on
+  it too, so each service keeps its own: the MCP token, the TLS pre-shared key.
+- **The pairing code carries `host` and `port` as optional fields.** Old
+  phones ignore them and old codes still decode, so there is no protocol
+  version bump. A phone dials `wss://<host>:<port>/` (a URL, as always) when
+  Bonjour cannot see the Mac; a working tailnet connection is kept rather than
+  dropped when Bonjour finds the Mac again. Phones must re-scan once to learn
+  the host.
+- `-FakeTailnetIP ::1` (Debug) stands in for a tailnet on a Mac without
+  Tailscale; `::1` keeps the test off every real network. `Tools/loopback.sh`
+  dials Phone Access on the fixed port through the phone's own
+  `BoardTransport.remoteEndpoint`.
+- Plain HTTP for MCP over the tailnet is deliberate: WireGuard encrypts it end
+  to end.
+
 ## The app's Terminal and Files views
 
 Two more `BoardViewMode` cases, both requiring a linked repository
@@ -359,10 +461,11 @@ project, and emphatically not `Apps/MobileClient`, which is a slot for a client
 of the **WorkflowHost daemon**, a different product on the other side of the
 wall. Putting it there would couple the two products together.
 
-**LAN only, and the Mac serves.** The phone talks to Claude WM directly over the
-local network: no account, no server, nothing leaves the Wi-Fi. CloudKit was the
-obvious alternative and is unavailable — iCloud entitlements require the App
-Sandbox, which this app cannot have.
+**The Mac serves, over the LAN or the user's tailnet.** The phone talks to
+Claude WM directly: no account, no server of ours. CloudKit was the obvious
+alternative and is unavailable — iCloud entitlements require the App Sandbox,
+which this app cannot have. Away from the Wi-Fi it goes over Tailscale — see
+*Remote access* below.
 
 Off by default, started from **Phone Access…**. Opening a listening socket on
 someone's network is not something to do quietly.

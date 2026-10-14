@@ -55,6 +55,19 @@ final class WorkItem {
     var workflowBranch: String?
     var workflowPRURL: String?
 
+    // MARK: - MCP
+    //
+    // Set when an agent claims the card through the MCP server
+    // (`claim_card`). Agent-owned like `workflowBranch`: the app shows them and
+    // never writes them. Optional, so this stays a lightweight migration.
+
+    var agentClaimedAt: Date?
+    /// The client that claimed it, as it named itself in `initialize`.
+    var agentName: String?
+
+    @Relationship(deleteRule: .cascade, inverse: \CardEvent.item)
+    var events: [CardEvent] = []
+
     /// Inverse is declared on `BoardColumn.items`. There is deliberately no
     /// direct `project` relationship: two cascade paths to the same object
     /// confuse SwiftData's delete rules, and `column?.project` is free.

@@ -15,7 +15,7 @@ struct ContentView: View {
     /// Selection is a `UUID`, never a model object: a `List(selection:)` bound
     /// to a deleted `@Model` can crash on the next render, whereas a stale
     /// UUID simply stops resolving.
-    @State private var selectedProjectID: UUID?
+    @State private var destination: AppDestination = .overview
     @State private var viewMode: BoardViewMode = .board
     @State private var inspectedItemID: UUID?
     @State private var filter = BoardFilter()
@@ -40,33 +40,29 @@ struct ContentView: View {
     /// nothing.
     @State private var boardService: BoardService?
 
+    /// App-level for the same reason as `boardServer`: the server must keep
+    /// answering while any project — or none — is on screen.
+    @State private var mcpServer = MCPServer()
+    @State private var tailnet = TailnetAccess.shared
+
     @Environment(\.modelContext) private var context
 
     private var selectedProject: Project? {
-        projects.first { $0.uuid == selectedProjectID }
+        guard let id = destination.projectID else { return nil }
+        return projects.first { $0.uuid == id }
     }
 
     var body: some View {
         NavigationSplitView {
-            ProjectSidebar(selection: $selectedProjectID)
-                .navigationSplitViewColumnWidth(min: 210, ideal: 250, max: 340)
+            ProjectSidebar(
+                destination: $destination,
+                viewMode: $viewMode,
+                isSharing: boardServer.state.isRunning,
+                isMCPRunning: mcpServer.state.isRunning
+            )
+            .navigationSplitViewColumnWidth(min: 220, ideal: 260, max: 360)
         } detail: {
-            if let selectedProject {
-                ProjectDetailView(
-                    project: selectedProject,
-                    viewMode: $viewMode,
-                    filter: $filter,
-                    inspectedItemID: $inspectedItemID
-                )
-                // Reset per-project view state when switching projects.
-                .id(selectedProject.uuid)
-            } else {
-                ContentUnavailableView(
-                    "No Project Selected",
-                    systemImage: "square.stack.3d.up",
-                    description: Text("Pick a project in the sidebar, or press ⌘N to create one.")
-                )
-            }
+            detail
         }
         .navigationSplitViewStyle(.balanced)
         .environment(filesStore)
@@ -75,14 +71,20 @@ struct ContentView: View {
         // rows for deleted projects are swept once at launch.
         .task {
             IssueCache.prune(keeping: Set(projects.map(\.uuid)), in: context)
+            applyLaunchArguments()
         }
         .onReceive(NotificationCenter.default.publisher(for: .boardViewModeRequested)) { note in
             guard let raw = note.userInfo?["mode"] as? String,
                   let mode = BoardViewMode(rawValue: raw) else { return }
             viewMode = mode
         }
-        .onChange(of: selectedProjectID) { _, _ in
-            inspectedItemID = nil
+        .onChange(of: destination) { _, _ in
+            // Overview and the queues open a card by setting both at once, so
+            // keep the card if it belongs to the project now on screen.
+            if let inspectedItemID,
+               selectedProject?.allItems.contains(where: { $0.uuid == inspectedItemID }) != true {
+                self.inspectedItemID = nil
+            }
             filter = BoardFilter()
         }
         .onReceive(NotificationCenter.default.publisher(for: .helpRequested)) { _ in
@@ -92,8 +94,18 @@ struct ContentView: View {
             HelpGuideView()
         }
         .environment(syncCoordinator)
+        .environment(mcpServer)
+        .environment(tailnet)
         .task {
             syncCoordinator.start(context: context)
+
+            // Same single publisher as the phone's edits: the coordinator
+            // writes `tasks.json` for syncing projects and tells phones.
+            mcpServer.tools.didMutate = { syncCoordinator.boardChanged($0) }
+            mcpServer.attach(context: context)
+
+            tailnet.onChange = { applyTailnet() }
+            tailnet.startMonitoring()
 
             let service = BoardService(context: context)
             service.didMutate = { syncCoordinator.boardChanged($0) }
@@ -120,6 +132,82 @@ struct ContentView: View {
         .sheet(isPresented: $showsPhoneAccess) {
             BoardSharingView(server: boardServer)
         }
+    }
+
+    @ViewBuilder
+    private var detail: some View {
+        switch destination {
+        case .overview:
+            OverviewView(open: openCard, openProject: openProject)
+        case .queue(let queue):
+            CardQueueView(queue: queue, open: openCard)
+        case .settings:
+            SettingsView(server: mcpServer, boardServer: boardServer, tailnet: tailnet)
+        case .project:
+            if let selectedProject {
+                ProjectDetailView(
+                    project: selectedProject,
+                    viewMode: $viewMode,
+                    filter: $filter,
+                    inspectedItemID: $inspectedItemID
+                )
+                // Reset per-project view state when switching projects.
+                .id(selectedProject.uuid)
+            } else {
+                ContentUnavailableView(
+                    "Project Not Found",
+                    systemImage: "square.stack.3d.up.slash",
+                    description: Text("It may have been deleted. Pick another project in the sidebar.")
+                )
+            }
+        }
+    }
+
+    /// Puts each server where remote access says it should be. Phone Access
+    /// has to restart to move between its LAN port and its fixed tailnet one;
+    /// the MCP server only adds or drops its second listener.
+    private func applyTailnet() {
+        mcpServer.setRemote(tailnet.mcpNode)
+        if boardServer.state.isRunning, !boardServer.matchesTailnet(tailnet.phoneNode) {
+            boardServer.stop()
+            boardServer.startPhoneAccess(tailnet: tailnet.phoneNode)
+        }
+    }
+
+    /// Debug only: `-OpenProject <name>` and `-ViewMode <mode>` land on a given
+    /// screen at launch, so a build can be checked by screenshot without
+    /// clicking through to it.
+    private func applyLaunchArguments() {
+        #if DEBUG
+        let arguments = UserDefaults.standard
+        if let name = arguments.string(forKey: "OpenProject"),
+           let project = projects.first(where: { $0.name == name }) {
+            destination = .project(project.uuid)
+        }
+        if let raw = arguments.string(forKey: "ViewMode"), let mode = BoardViewMode(rawValue: raw) {
+            viewMode = mode
+        }
+        if let raw = arguments.string(forKey: "OpenQueue"), let queue = CardQueue(rawValue: raw) {
+            destination = .queue(queue)
+        }
+        if arguments.bool(forKey: "OpenSettings") {
+            destination = .settings
+        }
+        #endif
+    }
+
+    private func openProject(_ project: Project) {
+        destination = .project(project.uuid)
+        viewMode = .board
+    }
+
+    /// Lands on the card's board with the card open — from the Overview and
+    /// the queues, which list cards from every project.
+    private func openCard(_ item: WorkItem) {
+        guard let project = item.project else { return }
+        inspectedItemID = item.uuid
+        destination = .project(project.uuid)
+        viewMode = .board
     }
 }
 

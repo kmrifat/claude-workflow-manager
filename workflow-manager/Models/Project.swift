@@ -23,10 +23,18 @@ final class Project {
     var createdAt: Date = Date.now
     var sortOrder: Double = 0
 
-    /// User-defined sidebar group ("folder"). `nil` or empty means ungrouped.
-    /// Local organization only — nothing syncs it. Optional with no default, so
-    /// it stays a lightweight SwiftData migration.
+    /// The flat sidebar group this app had before folders. Read once at launch
+    /// by `SidebarMutations.adoptLegacyGroups`, which turns each name into a
+    /// workspace and clears it; nothing else reads or writes it. Kept as a
+    /// property so existing stores still open without a migration.
     var groupName: String?
+
+    /// Where the project sits in the sidebar tree. `nil` means unfiled. Inverse
+    /// is declared on `ProjectFolder.projects`.
+    var folder: ProjectFolder?
+
+    /// Shown in the sidebar's Pinned section as well as in its folder.
+    var isPinned: Bool = false
 
     // MARK: - Linked GitHub repository
     //

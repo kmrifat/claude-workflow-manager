@@ -24,7 +24,6 @@ struct BoardSharingView: View {
     /// and the thing it switches cannot drift apart.
     @AppStorage(RemoteAccess.defaultsKey) private var repositoryAccess = false
 
-    @State private var pairingURL: URL?
     @State private var push = PushRegistry.shared
     @State private var pastedKey = ""
     @State private var showsKeyField = false
@@ -124,7 +123,11 @@ struct BoardSharingView: View {
             Text("Scan with your phone")
                 .font(.headline)
 
-            if let pairingURL, let image = BoardPairing.qrCode(for: pairingURL) {
+            // Built live rather than kept from `start()`: reopening this sheet
+            // while serving, or remote access changing, must show the code that
+            // is true now.
+            if let pairingURL = server.pairingURL(tailnet: TailnetAccess.shared.phoneNode),
+               let image = BoardPairing.qrCode(for: pairingURL) {
                 HStack {
                     Spacer()
                     Image(decorative: image, scale: 1)
@@ -344,12 +347,7 @@ struct BoardSharingView: View {
     // MARK: - Actions
 
     private func start() {
-        let key = BoardPairing.currentKey()
-        let name = BoardServer.defaultServiceName
-        server.start(key: key, serviceName: name)
-        pairingURL = try? BoardPairing.url(
-            for: BoardPairing.Payload(key: key, service: name, mac: name)
-        )
+        server.startPhoneAccess(tailnet: TailnetAccess.shared.phoneNode)
     }
 
     private func rotate() {

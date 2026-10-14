@@ -42,23 +42,26 @@ struct BoardColumnView: View {
     /// Cached issues, read once per column to know which labels the repository
     /// actually has. `gh issue create` fails outright on an unknown label.
     @State private var repositoryLabels: [String] = []
+    @State private var showsAllDone = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
             header
-            cardList
-            QuickAddField(placeholder: "New item in \(column.name)") { title in
-                withAnimation(.snappy(duration: 0.2)) {
-                    _ = BoardMutations.addItem(titled: title, to: column, in: context)
+            VStack(spacing: 4) {
+                cardList
+                QuickAddField(placeholder: "Card title") { title in
+                    withAnimation(.snappy(duration: 0.2)) {
+                        _ = BoardMutations.addItem(titled: title, to: column, in: context)
+                    }
                 }
+                .padding(.horizontal, 6)
+                .padding(.bottom, 6)
             }
-            .padding(.horizontal, 10)
-            .padding(.bottom, 10)
-        }
-        .background(.regularMaterial, in: .rect(cornerRadius: 12))
-        .overlay {
-            RoundedRectangle(cornerRadius: 12)
-                .strokeBorder(isColumnTargeted ? accent : .clear, lineWidth: 2)
+            .background(Theme.lane, in: .rect(cornerRadius: 10))
+            .overlay {
+                RoundedRectangle(cornerRadius: 10)
+                    .strokeBorder(isColumnTargeted ? accent : .clear, lineWidth: 2)
+            }
         }
         // Lowest-priority target: anything not caught by a card or the header
         // appends to the end of this column.
@@ -115,27 +118,40 @@ struct BoardColumnView: View {
                     .onSubmit(commitRename)
                     .onExitCommand { isRenaming = false }
             } else {
+                Circle()
+                    .fill(column.tint)
+                    .frame(width: 8, height: 8)
+                    .help(column.role.map { "Claude status: \($0.title)" } ?? "No Claude status")
+
                 Text(column.name.isEmpty ? "Untitled" : column.name)
                     .font(.system(size: 12, weight: .semibold))
-                    .textCase(.uppercase)
-                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
                     .onTapGesture(count: 2, perform: beginRename)
 
                 countBadge
 
-                if column.isCompletionColumn {
-                    Image(systemName: "checkmark.seal.fill")
-                        .font(.caption2)
-                        .foregroundStyle(.green)
-                        .help("Items here count as done")
-                }
-
                 Spacer(minLength: 0)
+
+                Button {
+                    let item = withAnimation(.snappy(duration: 0.2)) {
+                        BoardMutations.addItem(titled: "New item", to: column, in: context)
+                    }
+                    inspectedItemID = item.uuid
+                } label: {
+                    Image(systemName: "plus")
+                        .font(.system(size: 11, weight: .semibold))
+                        .frame(width: 20, height: 20)
+                        .contentShape(.rect)
+                }
+                .buttonStyle(.plain)
+                .foregroundStyle(.secondary)
+                .help("Add a card to \(column.name)")
+
                 columnMenu
             }
         }
-        .padding(.horizontal, 10)
-        .padding(.top, 10)
+        .padding(.horizontal, 4)
+        .frame(height: 24)
         .frame(maxWidth: .infinity, alignment: .leading)
         .contentShape(.rect)
         .background(alignment: .bottom) {
@@ -151,16 +167,27 @@ struct BoardColumnView: View {
         } isTargeted: { isHeaderTargeted = $0 }
     }
 
+    /// A plain count, or "2/3" in a pill when the column has a WIP limit —
+    /// red once it is over.
+    @ViewBuilder
     private var countBadge: some View {
-        Text(column.wipLimit.map { "\(column.items.count)/\($0)" } ?? "\(column.items.count)")
-            .font(.system(size: 11, weight: .medium))
-            .monospacedDigit()
-            .foregroundStyle(column.isOverWIP ? .red : .secondary)
-            .padding(.horizontal, 6)
-            .padding(.vertical, 1)
-            .background(column.isOverWIP ? Color.red.opacity(0.15) : Color.primary.opacity(0.06),
-                        in: .capsule)
-            .help(column.isOverWIP ? "Over the WIP limit" : "Items in this column")
+        let count = column.orderedItems.count
+        if let limit = column.wipLimit {
+            Text("\(count)/\(limit)")
+                .font(.system(size: 10, weight: .semibold))
+                .monospacedDigit()
+                .foregroundStyle(column.isOverWIP ? Theme.danger : .secondary)
+                .padding(.horizontal, 5)
+                .frame(height: 16)
+                .background(column.isOverWIP ? Theme.danger.opacity(0.15) : Color.primary.opacity(0.07),
+                            in: .rect(cornerRadius: 4))
+                .help(column.isOverWIP ? "Over the WIP limit" : "Cards / WIP limit")
+        } else {
+            Text("\(count)")
+                .font(.system(size: 11))
+                .monospacedDigit()
+                .foregroundStyle(.secondary)
+        }
     }
 
     private var columnMenu: some View {
@@ -223,23 +250,48 @@ struct BoardColumnView: View {
 
     // MARK: - Cards
 
+    /// A completion column lists its cards compactly and shows the first few:
+    /// done work is a record, and twenty full cards would push everything else
+    /// off screen.
+    private static let compactVisibleCount = 8
+
+    private var visibleItems: [WorkItem] {
+        let items = column.orderedItems
+        guard column.isCompletionColumn, !showsAllDone else { return items }
+        return Array(items.prefix(Self.compactVisibleCount))
+    }
+
     private var cardList: some View {
         ScrollView(.vertical) {
-            LazyVStack(spacing: 8) {
-                ForEach(column.orderedItems, id: \.uuid) { item in
+            // Not lazy: a lane holds a handful of cards, and `LazyVStack`
+            // mis-estimated a queued card's extra height and opened the lane
+            // scrolled past its first card.
+            VStack(spacing: column.isCompletionColumn ? 1 : 6) {
+                ForEach(visibleItems, id: \.uuid) { item in
                     card(for: item)
                 }
 
+                let hidden = column.orderedItems.count - visibleItems.count
+                if hidden > 0 || (showsAllDone && column.orderedItems.count > Self.compactVisibleCount) {
+                    Button(showsAllDone ? "Show fewer" : "Show \(hidden) more") {
+                        withAnimation(.snappy) { showsAllDone.toggle() }
+                    }
+                    .buttonStyle(.link)
+                    .font(.system(size: 12, weight: .medium))
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 6)
+                    .frame(height: 28)
+                }
+
                 if column.items.isEmpty {
-                    Text("Drop items here")
+                    Text("Drop cards here")
                         .font(.caption)
                         .foregroundStyle(.tertiary)
                         .frame(maxWidth: .infinity)
                         .frame(height: 60)
                 }
             }
-            .padding(.horizontal, 10)
-            .padding(.vertical, 2)
+            .padding(6)
         }
         .scrollIndicators(.automatic)
         .frame(maxHeight: .infinity)
@@ -251,7 +303,8 @@ struct BoardColumnView: View {
             item: item,
             isSelected: inspectedItemID == item.uuid || popoverItemID == item.uuid,
             isDimmed: filter.isActive && !filter.matches(item),
-            accent: accent
+            accent: accent,
+            isCompact: column.isCompletionColumn
         )
         .overlay(alignment: hoveredCardID == item.uuid && dropsAfterHovered ? .bottom : .top) {
             if hoveredCardID == item.uuid {
@@ -281,8 +334,8 @@ struct BoardColumnView: View {
             )
         }
         .draggable(WorkItemTransfer(itemID: item.uuid, sourceColumnID: column.uuid)) {
-            WorkItemCardView(item: item, accent: accent)
-                .frame(width: BoardView.columnWidth - 20)
+            WorkItemCardView(item: item, accent: accent, isCompact: column.isCompletionColumn)
+                .frame(width: BoardView.columnWidth - 12)
                 .opacity(0.9)
         }
         .dropDestination(for: WorkItemTransfer.self) { payloads, location in

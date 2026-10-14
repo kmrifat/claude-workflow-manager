@@ -74,7 +74,7 @@ struct PairingView: View {
         }
         do {
             let payload = try BoardPairingCode.payload(from: url)
-            onPaired(PairedMac(key: payload.key, service: payload.service, macName: payload.mac))
+            onPaired(PairedMac(payload: payload))
         } catch {
             self.error = error.localizedDescription
         }

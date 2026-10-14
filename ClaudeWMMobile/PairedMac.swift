@@ -17,6 +17,23 @@ struct PairedMac: Equatable {
     var key: Data
     var service: String
     var macName: String
+    /// The Mac's tailnet name and port, if it offered them when paired.
+    var remoteHost: String?
+    var remotePort: UInt16?
+}
+
+extension PairedMac {
+    /// In an extension so the memberwise initializer `PairedMacStore` uses
+    /// survives.
+    init(payload: BoardPairingCode.Payload) {
+        self.init(
+            key: payload.key,
+            service: payload.service,
+            macName: payload.mac,
+            remoteHost: payload.host,
+            remotePort: payload.port
+        )
+    }
 }
 
 enum PairedMacStore {
@@ -24,6 +41,8 @@ enum PairedMacStore {
     private static let keychainAccount = "pre-shared-key"
     private static let serviceKey = "pairedServiceName"
     private static let macNameKey = "pairedMacName"
+    private static let remoteHostKey = "pairedRemoteHost"
+    private static let remotePortKey = "pairedRemotePort"
 
     static func load() -> PairedMac? {
         guard let key = loadKey(),
@@ -32,7 +51,9 @@ enum PairedMacStore {
         return PairedMac(
             key: key,
             service: service,
-            macName: UserDefaults.standard.string(forKey: macNameKey) ?? service
+            macName: UserDefaults.standard.string(forKey: macNameKey) ?? service,
+            remoteHost: UserDefaults.standard.string(forKey: remoteHostKey),
+            remotePort: (UserDefaults.standard.object(forKey: remotePortKey) as? Int).map { UInt16($0) }
         )
     }
 
@@ -40,12 +61,16 @@ enum PairedMacStore {
         storeKey(pairing.key)
         UserDefaults.standard.set(pairing.service, forKey: serviceKey)
         UserDefaults.standard.set(pairing.macName, forKey: macNameKey)
+        UserDefaults.standard.set(pairing.remoteHost, forKey: remoteHostKey)
+        UserDefaults.standard.set(pairing.remotePort.map { Int($0) }, forKey: remotePortKey)
     }
 
     static func forget() {
         SecItemDelete(baseQuery() as CFDictionary)
         UserDefaults.standard.removeObject(forKey: serviceKey)
         UserDefaults.standard.removeObject(forKey: macNameKey)
+        UserDefaults.standard.removeObject(forKey: remoteHostKey)
+        UserDefaults.standard.removeObject(forKey: remotePortKey)
     }
 
     // MARK: - Keychain

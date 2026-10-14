@@ -45,19 +45,30 @@ struct ProjectDetailView: View {
         )
     }
 
-    /// Short description in the title bar; falls back to the goal so the
-    /// subtitle is rarely empty.
+    /// Under the title: the repository when there is one — it is what tells
+    /// two projects called "api" apart — else the description, else the goal.
     private var subtitle: String {
+        if let slug = project.repoSlug { return slug }
         if !project.summary.isEmpty { return project.summary }
         if !project.goal.isEmpty { return project.goal }
         return ""
     }
 
     var body: some View {
-        content
+        VStack(spacing: 0) {
+            if !viewMode.requiresRepository {
+                ScopeBar(project: project, filter: $filter)
+                Divider()
+            }
+            content
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+            .safeAreaInset(edge: .bottom, spacing: 0) {
+                ProjectStatusBar(project: project, runningCount: terminals.runningCount)
+            }
             .navigationTitle(project.name.isEmpty ? "Untitled Project" : project.name)
             .navigationSubtitle(subtitle)
-            .searchable(text: $filter.searchText, prompt: "Search items, owners, tags")
+            .searchable(text: $filter.searchText, prompt: "Search cards")
             .toolbar { toolbarContent }
             .sheet(isPresented: inspectorPresented) {
                 if let inspectedItem {
@@ -156,22 +167,25 @@ struct ProjectDetailView: View {
 
     @ToolbarContentBuilder
     private var toolbarContent: some ToolbarContent {
-        // Sits immediately before the window title, so icon and name read as
-        // one unit instead of repeating.
+        // Every item here is a plain system control, so the toolbar's Liquid
+        // Glass draws all the chrome. Anything carrying its own background or
+        // padding ends up as a pill inside a glass pill — which is what the
+        // first pass of this redesign did.
         ToolbarItem(placement: .navigation) {
             Button {
                 showsOverview = true
             } label: {
-                Image(systemName: project.symbolName)
-                    .foregroundStyle(project.accent.color)
+                Label("Project Details", systemImage: project.symbolName)
             }
+            .labelStyle(.iconOnly)
+            .foregroundStyle(project.accent.color)
             .help("Show goal, plan and timeline")
         }
 
         ToolbarItem(placement: .principal) {
             Picker("View", selection: $viewMode) {
                 ForEach(BoardViewMode.allCases) { mode in
-                    Label(mode.title, systemImage: mode.symbol).tag(mode)
+                    Text(mode.title).tag(mode)
                 }
             }
             .pickerStyle(.segmented)
@@ -179,19 +193,31 @@ struct ProjectDetailView: View {
             .fixedSize()
         }
 
-        ToolbarItem {
-            Button {
-                showsOverview = true
-            } label: {
-                ProjectMetricsPill(project: project)
+        if let chip = agentChip {
+            ToolbarItem {
+                // Toggles the board to Claude's cards — a chip that only
+                // reported a number would be a control that does nothing.
+                Button {
+                    filter.scope = filter.scope == .claude ? .all : .claude
+                } label: {
+                    Label(chip, systemImage: "sparkles")
+                }
+                .labelStyle(.titleAndIcon)
+                .foregroundStyle(Theme.agentText)
+                .help(filter.scope == .claude ? "Show every card" : "Show only cards with Claude")
             }
-            .buttonStyle(.plain)
+            ToolbarSpacer(.fixed)
         }
 
-        // The work-item filters (priority, overdue, owner, tag) mean nothing in
-        // the repository-backed modes — there are no work items to filter.
         if !viewMode.requiresRepository {
-            ToolbarItem { filterMenu }
+            ToolbarItem {
+                Button {
+                    addItemToFirstColumn()
+                } label: {
+                    Label("New Card", systemImage: "plus")
+                }
+                .help("Add a card to the first column (⇧⌘N)")
+            }
         }
 
         ToolbarItem {
@@ -255,57 +281,14 @@ struct ProjectDetailView: View {
         return "\(names): no column carries this status, so Claude cannot move a card there."
     }
 
-    private var filterMenu: some View {
-        Menu {
-            Menu("Minimum Priority") {
-                Button(filter.minimumPriority == nil ? "✓ Any" : "Any") {
-                    filter.minimumPriority = nil
-                }
-                ForEach(Priority.allCases.reversed()) { priority in
-                    Button(filter.minimumPriority == priority ? "✓ \(priority.title)" : priority.title) {
-                        filter.minimumPriority = priority
-                    }
-                }
-            }
-
-            Toggle("Overdue only", isOn: $filter.overdueOnly)
-
-            if !ownerOptions.isEmpty {
-                Menu("Owner") {
-                    Button(filter.owner == nil ? "✓ Anyone" : "Anyone") { filter.owner = nil }
-                    ForEach(ownerOptions, id: \.self) { owner in
-                        Button(filter.owner == owner ? "✓ \(owner)" : owner) { filter.owner = owner }
-                    }
-                }
-            }
-
-            if !tagOptions.isEmpty {
-                Menu("Tag") {
-                    Button(filter.tag == nil ? "✓ Any" : "Any") { filter.tag = nil }
-                    ForEach(tagOptions, id: \.self) { tag in
-                        Button(filter.tag == tag ? "✓ \(tag)" : tag) { filter.tag = tag }
-                    }
-                }
-            }
-
-            Divider()
-            Button("Clear Filters") { filter.clear() }
-                .disabled(!filter.isActive)
-        } label: {
-            Label("Filter", systemImage: filter.isActive
-                  ? "line.3.horizontal.decrease.circle.fill"
-                  : "line.3.horizontal.decrease")
-        }
-        .menuIndicator(.hidden)
-        .help(filter.isActive ? "Filters are active" : "Filter items")
-    }
-
-    private var ownerOptions: [String] {
-        Array(Set(project.allItems.map(\.owner).filter { !$0.isEmpty })).sorted()
-    }
-
-    private var tagOptions: [String] {
-        Array(Set(project.allItems.flatMap(\.tags))).sorted()
+    /// "Claude · 1 working", or "· 2 queued" when nothing is in progress yet.
+    private var agentChip: String? {
+        let items = project.allItems
+        let working = items.count { $0.agentState == .working }
+        let queued = items.count { $0.agentState == .queued }
+        if working > 0 { return "Claude · \(working) working" }
+        if queued > 0 { return "Claude · \(queued) queued" }
+        return nil
     }
 
     // MARK: - Actions

@@ -160,11 +160,21 @@ struct BoardScreen: View {
         }
     }
 
+    /// Bonjour first: on the same Wi-Fi it is the direct route, and a name
+    /// rather than a remembered address — see `BoardBrowser`. Away from it the
+    /// Mac is invisible to Bonjour, so dial its tailnet name instead, if the
+    /// pairing code carried one. A tailnet connection that is up is kept even
+    /// once Bonjour sees the Mac again — dropping a working socket to switch
+    /// routes would cost more than the route saves; if the tailnet dial never
+    /// connected, `onChange(of: browser.found)` retries through Bonjour.
     private func connect() {
         guard let paired else { return }
-        // By Bonjour name, never a remembered address — see `BoardBrowser`.
-        guard let endpoint = browser.endpoint(named: paired.service) else { return }
-        connection.connect(to: endpoint, key: paired.key)
+        if let endpoint = browser.endpoint(named: paired.service) {
+            connection.connect(to: endpoint, key: paired.key)
+        } else if let host = paired.remoteHost, let port = paired.remotePort,
+                  let endpoint = BoardTransport.remoteEndpoint(host: host, port: port) {
+            connection.connect(to: endpoint, key: paired.key)
+        }
     }
 }
 

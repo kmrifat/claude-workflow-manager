@@ -341,6 +341,39 @@ final class BoardServer {
     static func clientParameters(key: Data) -> NWParameters { parameters(key: key) }
 }
 
+extension BoardServer {
+    /// Starts serving phones and returns the pairing URL to show as a QR code.
+    ///
+    /// With a tailnet node, the port is fixed and the code names the node, so a
+    /// phone off the Wi-Fi knows where to dial. Without one the port is the
+    /// kernel's pick, as it always was — Bonjour tells the phone.
+    @discardableResult
+    func startPhoneAccess(tailnet node: Tailscale.Node?) -> URL? {
+        let key = BoardPairing.currentKey()
+        let name = Self.defaultServiceName
+        start(key: key, serviceName: name, port: node == nil ? 0 : TailnetAccess.phonePort)
+        return pairingURL(tailnet: node)
+    }
+
+    func pairingURL(tailnet node: Tailscale.Node?) -> URL? {
+        let name = Self.defaultServiceName
+        return try? BoardPairing.url(for: BoardPairing.Payload(
+            key: BoardPairing.currentKey(),
+            service: name,
+            mac: name,
+            host: node?.preferredHost,
+            port: node == nil ? nil : TailnetAccess.phonePort
+        ))
+    }
+
+    /// Whether the listener is on the port `node` calls for — if not, it has to
+    /// be restarted for a change in remote access to take effect.
+    func matchesTailnet(_ node: Tailscale.Node?) -> Bool {
+        guard case .running(let port) = state else { return true }
+        return node == nil ? port != TailnetAccess.phonePort : port == TailnetAccess.phonePort
+    }
+}
+
 /// What the transport hands its owner. Deliberately not a closure: the service
 /// needs to send on the same server it was called from, and a stored closure
 /// capturing it would be a retain cycle waiting to happen.

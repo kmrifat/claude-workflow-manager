@@ -125,6 +125,86 @@ enum SampleData {
             dueOffsets: [nil, nil, nil, nil, nil],
             priorities: [.low, .low, .normal, .normal, .normal]
         )
+
+        seedSidebar(into: context, launch: launch, redesign: redesign, research: research)
+    }
+
+    /// Workspaces, nested folders and a couple of cards with Claude, so the
+    /// sidebar, Overview and smart lists have something to show. Every name is
+    /// invented: this is what `-UseSampleData` screenshots are taken from.
+    private static func seedSidebar(
+        into context: ModelContext,
+        launch: Project,
+        redesign: Project,
+        research: Project
+    ) {
+        let acme = SidebarMutations.createFolder(named: "Acme Corp", in: nil, context: context)
+        let products = SidebarMutations.createFolder(named: "Products", in: acme, context: context)
+        let clients = SidebarMutations.createFolder(named: "Client Work", in: acme, context: context)
+        let personal = SidebarMutations.createFolder(named: "Personal", in: nil, context: context)
+
+        launch.folder = products
+        launch.isPinned = true
+        redesign.folder = products
+        research.folder = clients
+
+        let extras: [(String, ProjectAccent, String, ProjectFolder?, ProjectStatus, Int)] = [
+            ("Billing Portal", .green, "creditcard", clients, .active, 6),
+            ("Partner API", .orange, "server.rack", clients, .active, 3),
+            ("Field Notes", .teal, "leaf", personal, .active, 4),
+            ("Dotfiles", .gray, "hammer", personal, .completed, 2),
+            ("Recipe Box", .pink, "cart", nil, .planning, 0),
+        ]
+        for (index, extra) in extras.enumerated() {
+            let project = Project(
+                name: extra.0,
+                summary: "",
+                status: extra.4,
+                accent: extra.1,
+                symbolName: extra.2,
+                sortOrder: Double(4 + index) * 1024
+            )
+            context.insert(project)
+            BoardMutations.makeDefaultColumns(for: project, in: context)
+            project.folder = extra.3
+            let columns = project.orderedColumns
+            for n in 0..<extra.5 {
+                let item = WorkItem(title: "Task \(n + 1)", sortOrder: Double(n + 1) * FractionalOrder.step)
+                context.insert(item)
+                let column = columns[extra.4 == .completed ? columns.count - 1 : n % columns.count]
+                item.column = column
+                if column.isCompletionColumn { item.completedAt = .now }
+            }
+        }
+
+        // Claude: one card being worked on, one opened as a PR. A project only
+        // syncs with a folder to sync into, so it gets a scratch one.
+        let scratch = FileManager.default.temporaryDirectory
+            .appending(path: "ClaudeWM-sample/mobile-app", directoryHint: .isDirectory)
+        try? FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
+        launch.repoPath = Project.canonicalRepoPath(scratch)
+        launch.repoOwner = "acme"
+        launch.repoName = "mobile-app"
+        launch.repoDefaultBranch = "main"
+        launch.workflowSyncEnabled = true
+
+        let columns = launch.orderedColumns
+        if let working = columns[safe: 2]?.orderedItems.first {
+            working.workflowRequested = true
+            working.workflowBranch = "issue-57"
+            working.githubIssueNumber = 57
+            working.githubRepoSlug = "acme/mobile-app"
+        }
+        if let queued = columns[safe: 1]?.orderedItems.first {
+            queued.workflowRequested = true
+        }
+        if let review = columns[safe: 3]?.orderedItems.first {
+            review.workflowRequested = true
+            review.workflowBranch = "issue-54"
+            review.workflowPRURL = "https://github.com/acme/mobile-app/pull/212"
+            review.githubIssueNumber = 54
+            review.githubRepoSlug = "acme/mobile-app"
+        }
     }
 
     private static func seedItems(

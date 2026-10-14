@@ -17,7 +17,19 @@ import SwiftData
 
 @main
 struct ClaudeWMApp: App {
-    let sharedModelContainer = AppModelContainer.make()
+    let sharedModelContainer = Self.makeContainer()
+
+    /// `-UseSampleData` (Debug only) runs on an in-memory store seeded with
+    /// invented projects, so a development build can be launched and
+    /// screenshotted without touching — or migrating — the real board.
+    private static func makeContainer() -> ModelContainer {
+        #if DEBUG
+        if CommandLine.arguments.contains("-UseSampleData") {
+            return SampleData.container
+        }
+        #endif
+        return AppModelContainer.make()
+    }
 
     var body: some Scene {
         WindowGroup {
