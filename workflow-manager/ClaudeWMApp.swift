@@ -2,7 +2,7 @@
 //  ClaudeWMApp.swift
 //  workflow-manager
 //
-//  The app entry point. The product is "Claude WM": PRODUCT_NAME sets the
+//  The app entry point. The product is "Pitwall": PRODUCT_NAME sets the
 //  bundle name, the executable and — via GENERATE_INFOPLIST_FILE — CFBundleName,
 //  which is what the bold app menu shows; CFBundleDisplayName in Info.plist
 //  covers Finder and the About box.
@@ -17,12 +17,28 @@ import SwiftData
 
 @main
 struct ClaudeWMApp: App {
-    let sharedModelContainer = AppModelContainer.make()
+    let sharedModelContainer = Self.makeContainer()
+
+    /// `-UseSampleData` (Debug only) runs on an in-memory store seeded with
+    /// invented projects, so a development build can be launched and
+    /// screenshotted without touching — or migrating — the real board.
+    private static func makeContainer() -> ModelContainer {
+        #if DEBUG
+        if CommandLine.arguments.contains("-UseSampleData") {
+            return SampleData.container
+        }
+        #endif
+        return AppModelContainer.make()
+    }
 
     var body: some Scene {
         WindowGroup {
             ContentView()
         }
+        // Only the first window, before macOS has a saved frame to restore.
+        // Without it the window opens at the content's ideal size, which for a
+        // sidebar plus five lanes is a short strip that shows one card per lane.
+        .defaultSize(width: 1440, height: 900)
         .modelContainer(sharedModelContainer)
         .commands { WorkflowCommands() }
     }

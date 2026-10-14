@@ -15,7 +15,7 @@ struct BoardView: View {
 
     /// Fixed width is required: a `LazyHStack` inside a horizontal
     /// `ScrollView` cannot size its children to content.
-    static let columnWidth: CGFloat = 300
+    static let columnWidth: CGFloat = 264
 
     @State private var isAddingColumn = false
     @State private var newColumnName = ""
@@ -23,7 +23,7 @@ struct BoardView: View {
 
     var body: some View {
         ScrollView(.horizontal) {
-            HStack(alignment: .top, spacing: 16) {
+            HStack(alignment: .top, spacing: 12) {
                 ForEach(project.orderedColumns, id: \.uuid) { column in
                     BoardColumnView(
                         column: column,
@@ -37,14 +37,16 @@ struct BoardView: View {
                 addColumnControl
                     .frame(width: Self.columnWidth)
             }
-            .padding(20)
+            .padding(.horizontal, 16)
+            .padding(.top, 12)
+            .padding(.bottom, 16)
             // Columns fill the height themselves, so this is currently a no-op —
             // but the default `.center` would silently start centering them the
             // moment one stops filling. See `GitHubIssuesView.columns`.
             .frame(maxHeight: .infinity, alignment: .topLeading)
         }
         .scrollBounceBehavior(.basedOnSize, axes: .horizontal)
-        .background(.background.secondary)
+        .background(.background)
         .overlay {
             if project.columns.isEmpty {
                 ContentUnavailableView {
@@ -81,8 +83,9 @@ struct BoardView: View {
                         .font(.system(size: 12, weight: .medium))
                         .foregroundStyle(.secondary)
                         .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(12)
-                        .background(.quaternary.opacity(0.4), in: .rect(cornerRadius: 12))
+                        .padding(.horizontal, 10)
+                        .frame(height: 32)
+                        .background(Theme.lane, in: .rect(cornerRadius: 10))
                 }
                 .buttonStyle(.plain)
             }

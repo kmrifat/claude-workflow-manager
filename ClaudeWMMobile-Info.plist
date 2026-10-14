@@ -10,7 +10,7 @@
 	-->
 
 	<key>CFBundleDisplayName</key>
-	<string>Claude WM</string>
+	<string>Pitwall</string>
 
 	<!--
 	  BOTH of the next two keys are required, and missing either one fails
@@ -20,7 +20,7 @@
 	  present, and only allows the service types listed here.
 	-->
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>Claude WM finds your Mac on this Wi-Fi network to show and edit your boards. Nothing is sent over the internet.</string>
+	<string>Pitwall finds your Mac on this Wi-Fi network to show and edit your boards. Nothing is sent over the internet.</string>
 
 	<key>NSBonjourServices</key>
 	<array>

@@ -2,7 +2,7 @@
 //  ClaudeWMMobileApp.swift
 //  ClaudeWMMobile
 //
-//  Claude WM's phone client. Reaches the Mac over the local network only —
+//  Pitwall's phone client. Reaches the Mac over the local network only —
 //  there is no account, no server, and nothing leaves the Wi-Fi.
 //
 
@@ -43,7 +43,7 @@ struct ClaudeWMMobileApp: App {
                 // app can hand it straight here without a scanner of our own.
                 .onOpenURL { url in
                     if let pairing = try? BoardPairingCode.payload(from: url) {
-                        let mac = PairedMac(key: pairing.key, service: pairing.service, macName: pairing.mac)
+                        let mac = PairedMac(payload: pairing)
                         PairedMacStore.save(mac)
                         paired = mac
                     }

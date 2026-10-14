@@ -1,4 +1,4 @@
-// Repaints a real Claude WM screenshot with demo content.
+// Repaints a real Pitwall screenshot with demo content.
 //
 // The window chrome, toolbar, column headers and all the app's own geometry are
 // left exactly as captured; only the regions carrying private text — the

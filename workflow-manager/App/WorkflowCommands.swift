@@ -74,7 +74,7 @@ struct WorkflowCommands: Commands {
         }
 
         CommandGroup(replacing: .help) {
-            Button("Claude WM Help") {
+            Button("Pitwall Help") {
                 NotificationCenter.default.post(name: .helpRequested, object: nil)
             }
             .keyboardShortcut("?", modifiers: .command)

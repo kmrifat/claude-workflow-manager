@@ -10,10 +10,12 @@ import SwiftData
 enum AppModelContainer {
     static let schema = Schema([
         Project.self,
+        ProjectFolder.self,
         BoardColumn.self,
         WorkItem.self,
         Subtask.self,
         TerminalCommand.self,
+        CardEvent.self,
         // A disposable cache, not board data. See `IssueCacheEntry`.
         IssueCacheEntry.self,
     ])

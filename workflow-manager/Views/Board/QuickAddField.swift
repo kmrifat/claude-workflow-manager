@@ -38,7 +38,7 @@ struct QuickAddField: View {
                     isEditing = true
                     focused = true
                 } label: {
-                    Label("Add item", systemImage: "plus")
+                    Label("Add card", systemImage: "plus")
                         .font(.system(size: 12))
                         .frame(maxWidth: .infinity, alignment: .leading)
                         .padding(.vertical, 4)

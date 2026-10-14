@@ -14,8 +14,8 @@
 /* End PBXBuildFile section */
 
 /* Begin PBXFileReference section */
-		35DC1448301BDB93003C98BC /* Claude WM.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Claude WM.app"; sourceTree = BUILT_PRODUCTS_DIR; };
-		35DC1471301BDB93003C98BC /* Claude WM Mobile.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Claude WM Mobile.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+		35DC1448301BDB93003C98BC /* Pitwall.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Pitwall.app"; sourceTree = BUILT_PRODUCTS_DIR; };
+		35DC1471301BDB93003C98BC /* Pitwall Mobile.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = "Pitwall Mobile.app"; sourceTree = BUILT_PRODUCTS_DIR; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -65,8 +65,8 @@
 		35DC1449301BDB93003C98BC /* Products */ = {
 			isa = PBXGroup;
 			children = (
-				35DC1448301BDB93003C98BC /* Claude WM.app */,
-				35DC1471301BDB93003C98BC /* Claude WM Mobile.app */,
+				35DC1448301BDB93003C98BC /* Pitwall.app */,
+				35DC1471301BDB93003C98BC /* Pitwall Mobile.app */,
 			);
 			name = Products;
 			sourceTree = "<group>";
@@ -95,7 +95,7 @@
 				35DC14B1301BDB93003C98BC /* SwiftTerm */,
 			);
 			productName = "workflow-manager";
-			productReference = 35DC1448301BDB93003C98BC /* Claude WM.app */;
+			productReference = 35DC1448301BDB93003C98BC /* Pitwall.app */;
 			productType = "com.apple.product-type.application";
 		};
 		35DC1470301BDB93003C98BC /* ClaudeWMMobile */ = {
@@ -119,7 +119,7 @@
 				35DC14C1301BDB93003C98BC /* SwiftTerm */,
 			);
 			productName = ClaudeWMMobile;
-			productReference = 35DC1471301BDB93003C98BC /* Claude WM Mobile.app */;
+			productReference = 35DC1471301BDB93003C98BC /* Pitwall Mobile.app */;
 			productType = "com.apple.product-type.application";
 		};
 /* End PBXNativeTarget section */
@@ -339,7 +339,7 @@
 				);
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = "com.binarycastle.workflow-manager";
-				PRODUCT_NAME = "Claude WM";
+				PRODUCT_NAME = Pitwall;
 				REGISTER_APP_GROUPS = YES;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
@@ -373,7 +373,7 @@
 				);
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = "com.binarycastle.workflow-manager";
-				PRODUCT_NAME = "Claude WM";
+				PRODUCT_NAME = Pitwall;
 				REGISTER_APP_GROUPS = YES;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
 				SWIFT_APPROACHABLE_CONCURRENCY = YES;
@@ -403,7 +403,7 @@
 				);
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = "com.binarycastle.claude-wm-mobile";
-				PRODUCT_NAME = "Claude WM Mobile";
+				PRODUCT_NAME = "Pitwall Mobile";
 				SDKROOT = iphoneos;
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
@@ -433,7 +433,7 @@
 				);
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = "com.binarycastle.claude-wm-mobile";
-				PRODUCT_NAME = "Claude WM Mobile";
+				PRODUCT_NAME = "Pitwall Mobile";
 				SDKROOT = iphoneos;
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
 				SWIFT_COMPILATION_MODE = wholemodule;

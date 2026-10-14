@@ -18,6 +18,7 @@ struct WorkItemEditorSheet: View {
     /// Optional so a host that doesn't provide one — a preview, or any future
     /// call site — degrades to hiding the Claude controls instead of trapping.
     @Environment(WorkflowSyncModel.self) private var sync: WorkflowSyncModel?
+    @Environment(MCPServer.self) private var mcp: MCPServer?
 
     @Bindable var item: WorkItem
     var accent: Color = .accentColor
@@ -180,8 +181,8 @@ struct WorkItemEditorSheet: View {
             if let project = item.project, project.hasRepository {
                 claudeLaunchSection
                 githubSection(for: project)
-                if project.isSyncing, let sync {
-                    claudeSection(for: project, sync: sync)
+                if project.isSyncing || mcp?.isEnabled == true {
+                    claudeSection(for: project)
                 }
             }
 
@@ -377,18 +378,18 @@ struct WorkItemEditorSheet: View {
     /// — the agent picks work up from there, because `claude remote-control`
     /// has no way to be handed a task directly.
     @ViewBuilder
-    private func claudeSection(for project: Project, sync: WorkflowSyncModel) -> some View {
+    private func claudeSection(for project: Project) -> some View {
         Section("Claude") {
             if item.workflowRequested {
                 LabeledContent("Status", value: "Waiting for a session to pick this up")
                 Button("Cancel Request") {
                     item.workflowRequested = false
-                    Task { await sync.writeNow(for: project, context: context) }
+                    writeTasksFile(for: project)
                 }
             } else {
                 Button("Send to Claude") {
                     item.workflowRequested = true
-                    Task { await sync.writeNow(for: project, context: context) }
+                    writeTasksFile(for: project)
                 }
                 .disabled(item.isBlocked)
                 if item.isBlocked {
@@ -404,7 +405,34 @@ struct WorkItemEditorSheet: View {
             if let prUrl = item.workflowPRURL, let url = URL(string: prUrl) {
                 Link("Open Pull Request", destination: url)
             }
+            if let name = item.agentName, let claimed = item.agentClaimedAt {
+                LabeledContent("Claimed by", value: "\(name), \(claimed.formatted(.relative(presentation: .named)))")
+            }
         }
+
+        let events = item.events.filter { !$0.isDeleted }.sorted { $0.date > $1.date }
+        if !events.isEmpty {
+            Section("Activity") {
+                ForEach(events.prefix(20), id: \.uuid) { event in
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text(event.summary)
+                        if let note = event.note {
+                            Text(note).foregroundStyle(.secondary).textSelection(.enabled)
+                        }
+                        Text("\(event.actor) · \(event.tool ?? "") · \(event.date.formatted(date: .abbreviated, time: .shortened))")
+                            .font(.caption)
+                            .foregroundStyle(.tertiary)
+                    }
+                }
+            }
+        }
+    }
+
+    /// Only a syncing board has a `tasks.json` to rewrite; over MCP the agent
+    /// reads the request straight from the board.
+    private func writeTasksFile(for project: Project) {
+        guard project.isSyncing, let sync else { return }
+        Task { await sync.writeNow(for: project, context: context) }
     }
 
     // MARK: - Helpers

@@ -57,6 +57,18 @@ enum BoardTransport {
         parameters.defaultProtocolStack.applicationProtocols.insert(websocket, at: 0)
         return parameters
     }
+
+    /// `wss://host:port/` — a URL, never host+port: the WebSocket upgrade
+    /// needs a path and a `Host` header, and dialling host+port completes TLS
+    /// and then aborts with POSIX 53 (see `BoardServer.clientParameters`).
+    static func remoteEndpoint(host: String, port: UInt16) -> NWEndpoint? {
+        var components = URLComponents()
+        components.scheme = "wss"
+        components.host = host
+        components.port = Int(port)
+        components.path = "/"
+        return components.url.map { NWEndpoint.url($0) }
+    }
 }
 
 /// The `claudewm://pair?d=…` payload, decoded on the phone.
@@ -69,6 +81,10 @@ enum BoardPairingCode {
         var key: Data
         var service: String
         var mac: String
+        /// The Mac's tailnet name and fixed port, present when it has remote
+        /// access on. Where to dial when Bonjour cannot see the Mac.
+        var host: String?
+        var port: UInt16?
     }
 
     static let keyByteCount = 32
@@ -94,8 +110,8 @@ enum BoardPairingCode {
 
         var errorDescription: String? {
             switch self {
-            case .notAPairingCode: "That isn’t a Claude WM pairing code."
-            case .needsNewerApp:   "That Mac is running a newer Claude WM. Update this app to pair with it."
+            case .notAPairingCode: "That isn’t a Pitwall pairing code."
+            case .needsNewerApp:   "That Mac is running a newer Pitwall. Update this app to pair with it."
             }
         }
     }

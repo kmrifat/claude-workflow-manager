@@ -2,7 +2,7 @@
 //  WireProtocol.swift
 //  ClaudeWMWire
 //
-//  The compatibility boundary between Claude WM and its iOS client. The message
+//  The compatibility boundary between Pitwall and its iOS client. The message
 //  types themselves land here next; this file owns the one thing they all carry.
 //
 

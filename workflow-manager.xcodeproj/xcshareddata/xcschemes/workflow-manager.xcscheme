@@ -16,7 +16,7 @@
             <BuildableReference
                BuildableIdentifier = "primary"
                BlueprintIdentifier = "35DC1447301BDB93003C98BC"
-               BuildableName = "Claude WM.app"
+               BuildableName = "Pitwall.app"
                BlueprintName = "workflow-manager"
                ReferencedContainer = "container:workflow-manager.xcodeproj">
             </BuildableReference>
@@ -46,7 +46,7 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "35DC1447301BDB93003C98BC"
-            BuildableName = "Claude WM.app"
+            BuildableName = "Pitwall.app"
             BlueprintName = "workflow-manager"
             ReferencedContainer = "container:workflow-manager.xcodeproj">
          </BuildableReference>
@@ -63,7 +63,7 @@
          <BuildableReference
             BuildableIdentifier = "primary"
             BlueprintIdentifier = "35DC1447301BDB93003C98BC"
-            BuildableName = "Claude WM.app"
+            BuildableName = "Pitwall.app"
             BlueprintName = "workflow-manager"
             ReferencedContainer = "container:workflow-manager.xcodeproj">
          </BuildableReference>

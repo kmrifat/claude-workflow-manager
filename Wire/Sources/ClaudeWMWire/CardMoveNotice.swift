@@ -52,7 +52,7 @@ public struct CardMoveNotice: Sendable, Equatable {
         self.origin = origin
     }
 
-    /// The card, not the app. A banner that says "Claude WM" tells you nothing
+    /// The card, not the app. A banner that says "Pitwall" tells you nothing
     /// you did not already know from the icon next to it.
     public var title: String {
         cardTitle.isEmpty ? "Untitled card" : cardTitle

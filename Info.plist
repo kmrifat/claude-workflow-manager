@@ -6,11 +6,11 @@
 	  `CFBundleDisplayName` (Finder and the About box) is honored from this file.
 	  `CFBundleName` — what the macOS app menu, the bold first menu, uses — is NOT:
 	  GENERATE_INFOPLIST_FILE derives it from PRODUCT_NAME and overrides any value
-	  here, so the app menu name is set by PRODUCT_NAME = "Claude WM" in the target
+	  here, so the app menu name is set by PRODUCT_NAME = Pitwall in the target
 	  build settings, not by a key in this file.
 	-->
 	<key>CFBundleDisplayName</key>
-	<string>Claude WM</string>
+	<string>Pitwall</string>
 
 	<!--
 	  Declares the drag payload type used by the Kanban board. Without this,
@@ -32,7 +32,7 @@
 	  The service type must match BoardPairing.serviceType.
 	-->
 	<key>NSLocalNetworkUsageDescription</key>
-	<string>Claude WM shares your board with your iPhone over this network when Phone Access is on. Nothing leaves the local network.</string>
+	<string>Pitwall shares your board with your iPhone over this network when Phone Access is on. Nothing leaves the local network.</string>
 
 	<key>NSBonjourServices</key>
 	<array>
@@ -45,7 +45,7 @@
 			<key>UTTypeIdentifier</key>
 			<string>com.binarycastle.workflow-manager.workitem</string>
 			<key>UTTypeDescription</key>
-			<string>Claude WM Work Item</string>
+			<string>Pitwall Work Item</string>
 			<key>UTTypeConformsTo</key>
 			<array>
 				<string>public.data</string>

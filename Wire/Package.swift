@@ -1,6 +1,6 @@
 // swift-tools-version: 6.1
 //
-// ClaudeWMWire — the vocabulary Claude WM and its iOS client both speak.
+// ClaudeWMWire — the vocabulary Pitwall and its iOS client both speak.
 //
 // ## Why this exists at all
 //

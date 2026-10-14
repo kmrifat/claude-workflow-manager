@@ -2,59 +2,104 @@
 //  ProjectSidebar.swift
 //  workflow-manager
 //
+//  Workspace › Folder › … › Project › View, every level foldable. The layout is
+//  design/ClaudeWM.fig › SB.
+//
 //  Built on a ScrollView + VStack rather than a `List`, on purpose: `List` never
-//  animates row height, so a collapsing group just popped. Here a group's rows
-//  live in a VStack whose height animates, which reads as a real accordion. The
-//  cost is that selection, drag-reorder and the sidebar look are hand-rolled
-//  instead of coming from `List` — see `projectRow`.
+//  animates row height, so a fold just popped. Here a section's rows live in a
+//  VStack whose height animates, which reads as a real accordion. The cost is
+//  that selection, drag-and-drop and the sidebar look are hand-rolled instead
+//  of coming from `List` — see `SidebarRow`.
+//
+//  Folds are remembered in `UserDefaults`, not in the store: they are a viewing
+//  state, and writing them into SwiftData would put every fold on the undo
+//  stack and wake the board sync for nothing.
 //
 
 import SwiftUI
 import SwiftData
+import AppKit
 
 struct ProjectSidebar: View {
     @Environment(\.modelContext) private var context
-    /// Optional so previews without the store don't trap; the run-all menu items
-    /// just stay hidden there.
+    /// Optional so previews without the store don't trap.
     @Environment(TerminalStateStore.self) private var terminalStore: TerminalStateStore?
-    @Binding var selection: UUID?
+
+    @Binding var destination: AppDestination
+    @Binding var viewMode: BoardViewMode
+    /// Whether Phone Access and the MCP server are serving, for the footer.
+    var isSharing: Bool = false
+    var isMCPRunning: Bool = false
 
     @Query(sort: \Project.sortOrder) private var projects: [Project]
+    @Query(sort: \ProjectFolder.sortOrder) private var folders: [ProjectFolder]
+
     @State private var editorTarget: ProjectEditorTarget?
+    /// Set when "New Project Here…" opened the editor, so the new project lands
+    /// in that folder.
+    @State private var newProjectFolder: ProjectFolder?
     @State private var openError: String?
     @State private var isOpeningFolder = false
-    /// The project waiting for a new group name, and the field it types into.
-    @State private var projectForNewGroup: Project?
-    @State private var newGroupName = ""
-    /// Groups the user has collapsed. In memory: expansion is a viewing state,
-    /// not something worth persisting.
-    @State private var collapsedGroups: Set<String> = []
+    @State private var folderPrompt: FolderPrompt?
+    @State private var folderName = ""
+    @State private var folderToDelete: ProjectFolder?
+    @State private var dropTargetKey: String?
+    @State private var filterText = ""
+    @FocusState private var filterFocused: Bool
 
-    // Grouped in memory: project counts are tiny, and it avoids putting the
-    // status raw string through a `#Predicate`.
-    private var active: [Project] {
-        projects.filter { $0.status != .completed && $0.status != .archived }
+    /// Things open by default that the user closed: workspaces, folders, Pinned,
+    /// and the open project's view list.
+    @AppStorage("sidebar.closed") private var closedRaw = ""
+    /// Things closed by default that the user opened: Archived.
+    @AppStorage("sidebar.opened") private var openedRaw = ""
+
+    // MARK: - Derived
+
+    private var workspaces: [ProjectFolder] {
+        folders.filter { $0.parent == nil && !$0.isDeleted }
     }
-    private var completed: [Project] {
-        projects.filter { $0.status == .completed }
+
+    private var liveProjects: [Project] {
+        projects.filter { !$0.isDeleted && $0.status != .archived }
     }
+
+    private var unfiled: [Project] {
+        liveProjects.filter { $0.folder == nil }
+    }
+
+    private var pinned: [Project] {
+        liveProjects.filter(\.isPinned)
+    }
+
     private var archived: [Project] {
-        projects.filter { $0.status == .archived }
+        projects.filter { !$0.isDeleted && $0.status == .archived }
     }
+
+    private var isFiltering: Bool {
+        !filterText.trimmingCharacters(in: .whitespaces).isEmpty
+    }
+
+    // MARK: - Body
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 2) {
-                activeContent
-                statusSection("Completed", completed)
-                statusSection("Archived", archived)
+        VStack(spacing: 0) {
+            filterField
+            ScrollView {
+                VStack(alignment: .leading, spacing: 1) {
+                    if isFiltering {
+                        filterResults
+                    } else {
+                        tree
+                    }
+                }
+                .padding(.horizontal, 10)
+                .padding(.bottom, 10)
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .padding(.horizontal, 8)
-            .padding(.vertical, 6)
-            .frame(maxWidth: .infinity, alignment: .leading)
+            footer
         }
         .overlay {
-            if projects.isEmpty {
+            if projects.isEmpty && folders.isEmpty {
                 ContentUnavailableView {
                     Label("No Projects", systemImage: "square.stack.3d.up")
                 } description: {
@@ -65,33 +110,12 @@ struct ProjectSidebar: View {
                 }
             }
         }
-        .safeAreaInset(edge: .bottom) {
-            Menu {
-                addMenuItems
-            } label: {
-                Label(isOpeningFolder ? "Opening…" : "Add Project", systemImage: "plus")
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
-            .menuStyle(.button)
-            .buttonStyle(.accessoryBar)
-            .disabled(isOpeningFolder)
-            .padding(8)
-        }
-        .toolbar {
-            ToolbarItem {
-                Menu {
-                    addMenuItems
-                } label: {
-                    Label("Add Project", systemImage: "plus")
-                }
-                .menuIndicator(.hidden)
-                .disabled(isOpeningFolder)
-                .help("Create a project, or open a repository folder")
-            }
-        }
-        .sheet(item: $editorTarget) { target in
+        .sheet(item: $editorTarget, onDismiss: { newProjectFolder = nil }) { target in
             ProjectEditorSheet(target: target) { project in
-                selection = project.uuid
+                if case .new = target, let folder = newProjectFolder {
+                    project.folder = folder
+                }
+                open(project)
             }
         }
         .alert(
@@ -102,38 +126,715 @@ struct ProjectSidebar: View {
         } message: {
             Text(openError ?? "")
         }
+        .alert(
+            folderPrompt?.title ?? "",
+            isPresented: .init(get: { folderPrompt != nil }, set: { if !$0 { folderPrompt = nil } })
+        ) {
+            TextField("Name", text: $folderName)
+            Button(folderPrompt?.confirmTitle ?? "OK") { commitFolderPrompt() }
+            Button("Cancel", role: .cancel) { folderPrompt = nil }
+        } message: {
+            Text(folderPrompt?.message ?? "")
+        }
+        .confirmationDialog(
+            "Delete “\(folderToDelete?.displayName ?? "")”?",
+            isPresented: .init(get: { folderToDelete != nil }, set: { if !$0 { folderToDelete = nil } })
+        ) {
+            Button("Delete", role: .destructive) {
+                if let folder = folderToDelete {
+                    withAnimation(.snappy) { SidebarMutations.delete(folder, context: context) }
+                }
+                folderToDelete = nil
+            }
+        } message: {
+            Text("Its projects and folders move up a level. No project is deleted.")
+        }
         .onReceive(NotificationCenter.default.publisher(for: .newProjectRequested)) { _ in
             editorTarget = .new
         }
         .onReceive(NotificationCenter.default.publisher(for: .openProjectFolderRequested)) { _ in
             openProjectFolder()
         }
-        .alert(
-            "New Group",
-            isPresented: .init(
-                get: { projectForNewGroup != nil },
-                set: { if !$0 { projectForNewGroup = nil } }
-            )
-        ) {
-            TextField("Group name", text: $newGroupName)
-            Button("Create") {
-                let trimmed = newGroupName.trimmingCharacters(in: .whitespacesAndNewlines)
-                if !trimmed.isEmpty { projectForNewGroup?.groupName = trimmed }
-                projectForNewGroup = nil
+        .task {
+            SidebarMutations.adoptLegacyGroups(in: context)
+        }
+        // AppKit makes the window's first text field its initial first
+        // responder, so every launch opened with the filter focused and ringed.
+        // `.defaultFocus(_, false)` does not override that, and resigning in
+        // `onAppear` loses a race with the window becoming key.
+        .background(InitialFocusResigner())
+    }
+
+    // MARK: - Filter
+
+    private var filterField: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "magnifyingglass")
+                .font(.system(size: 11))
+                .foregroundStyle(.secondary)
+            TextField("Filter \(liveProjects.count) projects", text: $filterText)
+                .textFieldStyle(.plain)
+                .font(.system(size: 12))
+                .focused($filterFocused)
+                .onSubmit { filterMatches.first.map(open) }
+                .onExitCommand { filterText = ""; filterFocused = false }
+            if isFiltering {
+                Button {
+                    filterText = ""
+                } label: {
+                    Image(systemName: "xmark.circle.fill")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.secondary)
+                }
+                .buttonStyle(.plain)
+            } else {
+                Text("⌘⇧F")
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(.tertiary)
             }
-            Button("Cancel", role: .cancel) { projectForNewGroup = nil }
-        } message: {
-            Text("Put “\(projectForNewGroup?.name ?? "")” into a new group.")
+        }
+        .padding(.horizontal, 8)
+        .frame(height: 28)
+        .background(Color.primary.opacity(0.06), in: .rect(cornerRadius: 7))
+        .overlay {
+            RoundedRectangle(cornerRadius: 7)
+                .strokeBorder(filterFocused ? Color.accentColor : Theme.hairline,
+                              lineWidth: filterFocused ? 2 : 1)
+        }
+        .padding(.horizontal, 10)
+        .padding(.top, 2)
+        .padding(.bottom, 8)
+        .background {
+            // ⌘⇧F from anywhere in the window.
+            Button("") { filterFocused = true }
+                .keyboardShortcut("f", modifiers: [.command, .shift])
+                .hidden()
         }
     }
 
-    /// No `keyboardShortcut` here on purpose: the File menu already binds ⌘N and
-    /// ⌘O app-wide, and binding them a second time inside this menu would race —
-    /// ⌘O could open two panels.
+    private var filterMatches: [Project] {
+        let needle = filterText.trimmingCharacters(in: .whitespaces).lowercased()
+        return projects.filter { project in
+            guard !project.isDeleted else { return false }
+            return project.name.lowercased().contains(needle)
+                || project.summary.lowercased().contains(needle)
+                || (project.repoSlug?.lowercased().contains(needle) ?? false)
+                || (project.folder?.path.contains { $0.name.lowercased().contains(needle) } ?? false)
+        }
+    }
+
+    /// Matches grouped under their folder path. Parents stay as context — a
+    /// project called "api" means little without the client it belongs to.
     @ViewBuilder
-    private var addMenuItems: some View {
-        Button("New Project…") { editorTarget = .new }
-        Button("Open Project Folder…") { openProjectFolder() }
+    private var filterResults: some View {
+        let matches = filterMatches
+        let groups = Dictionary(grouping: matches) { location(of: $0) }
+        Text(matches.count == 1 ? "1 project" : "\(matches.count) projects")
+            .font(.system(size: 11))
+            .foregroundStyle(.secondary)
+            .padding(.horizontal, 8)
+            .padding(.bottom, 4)
+        ForEach(groups.keys.sorted(), id: \.self) { path in
+            Text(path)
+                .font(.system(size: 11, weight: .semibold))
+                .foregroundStyle(.secondary)
+                .lineLimit(1)
+                .padding(.horizontal, 8)
+                .frame(height: Theme.Sidebar.headerHeight)
+                .padding(.top, 6)
+            ForEach(groups[path] ?? [], id: \.uuid) { project in
+                projectNode(project, depth: 0, expandable: false)
+            }
+        }
+        if matches.isEmpty {
+            Text("No project matches “\(filterText)”.")
+                .font(.system(size: 12))
+                .foregroundStyle(.secondary)
+                .padding(8)
+        }
+    }
+
+    private func location(of project: Project) -> String {
+        if project.status == .archived { return "Archived" }
+        guard let folder = project.folder else { return "No Folder" }
+        return folder.path.map(\.displayName).joined(separator: " › ")
+    }
+
+    // MARK: - Tree
+
+    @ViewBuilder
+    private var tree: some View {
+        smartRows
+
+        if !pinned.isEmpty {
+            let open = isOpen("pinned")
+            SidebarSectionHeader(title: "Pinned", isOpen: open) { toggle("pinned") }
+            if open {
+                ForEach(pinned, id: \.uuid) { project in
+                    projectNode(project, depth: 0, expandable: false)
+                }
+            }
+        }
+
+        ForEach(workspaces, id: \.uuid) { workspace in
+            workspaceSection(workspace)
+        }
+
+        if !unfiled.isEmpty {
+            if workspaces.isEmpty {
+                Color.clear.frame(height: 8)
+            } else {
+                let open = isOpen("unfiled")
+                SidebarSectionHeader(title: "No Folder", symbol: "tray", count: unfiled.count, isOpen: open) {
+                    toggle("unfiled")
+                }
+                .dropDestination(for: String.self) { payloads, _ in
+                    drop(payloads, into: nil)
+                }
+            }
+            if workspaces.isEmpty || isOpen("unfiled") {
+                ForEach(unfiled, id: \.uuid) { project in
+                    projectNode(project, depth: 0)
+                }
+            }
+        }
+
+        if !archived.isEmpty {
+            let open = openedKeys.contains("archived")
+            SidebarSectionHeader(title: "Archived", symbol: "archivebox", count: archived.count, isOpen: open) {
+                toggleOpened("archived")
+            }
+            if open {
+                ForEach(archived, id: \.uuid) { project in
+                    projectNode(project, depth: 0, expandable: false)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var smartRows: some View {
+        smartRow(.overview, title: "Overview", symbol: "square.grid.2x2", tint: Theme.link, count: nil)
+        smartRow(.queue(.agents), title: CardQueue.agents.title, symbol: CardQueue.agents.symbol,
+                 tint: Theme.agent, count: CardQueue.agents.count(in: projects), dot: Theme.agent)
+        smartRow(.queue(.review), title: CardQueue.review.title, symbol: CardQueue.review.symbol,
+                 tint: Theme.warning, count: CardQueue.review.count(in: projects))
+        smartRow(.queue(.overdue), title: CardQueue.overdue.title, symbol: CardQueue.overdue.symbol,
+                 tint: Theme.danger, count: CardQueue.overdue.count(in: projects))
+    }
+
+    private func smartRow(
+        _ target: AppDestination,
+        title: String,
+        symbol: String,
+        tint: Color,
+        count: Int?,
+        dot: Color? = nil
+    ) -> some View {
+        let selected = destination == target
+        return SidebarRow(isSelected: selected, title: title) {
+            Image(systemName: symbol)
+                .font(.system(size: 13))
+                .foregroundStyle(selected ? .white : tint)
+        } accessory: {
+            if let count, count > 0 {
+                HStack(spacing: 5) {
+                    if let dot { Circle().fill(selected ? .white : dot).frame(width: 6, height: 6) }
+                    Text("\(count)").font(.system(size: 11, weight: .medium)).monospacedDigit()
+                }
+            }
+        }
+        .onTapGesture { destination = target }
+    }
+
+    // MARK: - Workspaces and folders
+
+    @ViewBuilder
+    private func workspaceSection(_ workspace: ProjectFolder) -> some View {
+        let key = workspace.uuid.uuidString
+        let open = isOpen(key)
+        let contained = workspace.allProjects.filter { $0.status != .archived }
+        VStack(alignment: .leading, spacing: 1) {
+            SidebarSectionHeader(
+                title: workspace.displayName,
+                symbol: "building.2",
+                count: contained.count,
+                isOpen: open,
+                onToggle: { toggle(key) }
+            ) {
+                if !open {
+                    let rollup = FolderRollup(projects: contained, terminals: terminalStore)
+                    HStack(spacing: 3) {
+                        if rollup.agents > 0 { Circle().fill(Theme.agent).frame(width: 5, height: 5) }
+                        if rollup.running > 0 { Circle().fill(Theme.running).frame(width: 5, height: 5) }
+                        if rollup.late > 0 { Circle().fill(Theme.danger).frame(width: 5, height: 5) }
+                    }
+                }
+            }
+            .background(dropHighlight(key), in: .rect(cornerRadius: 6))
+            .contextMenu { folderMenu(workspace) }
+            .draggable("folder:\(key)")
+            .dropDestination(for: String.self) { payloads, _ in
+                drop(payloads, into: workspace)
+            } isTargeted: { setDropTarget(key, $0) }
+
+            if open {
+                folderContents(workspace, depth: 0)
+                    .transition(.opacity.combined(with: .move(edge: .top)))
+            }
+        }
+        .clipped()
+    }
+
+    private func folderContents(_ folder: ProjectFolder, depth: Int) -> AnyView {
+        AnyView(
+            VStack(alignment: .leading, spacing: 1) {
+                ForEach(folder.orderedChildren, id: \.uuid) { child in
+                    folderNode(child, depth: depth)
+                }
+                ForEach(folder.orderedProjects.filter { $0.status != .archived }, id: \.uuid) { project in
+                    projectNode(project, depth: depth)
+                }
+            }
+        )
+    }
+
+    /// A folder row and, when open, everything in it. `AnyView` because the
+    /// tree is recursive and an opaque type cannot contain itself.
+    private func folderNode(_ folder: ProjectFolder, depth: Int) -> AnyView {
+        let key = folder.uuid.uuidString
+        let open = isOpen(key)
+        let contained = folder.allProjects.filter { $0.status != .archived }
+        let rollup = FolderRollup(projects: contained, terminals: terminalStore)
+        return AnyView(
+            VStack(alignment: .leading, spacing: 1) {
+                SidebarRow(
+                    depth: depth,
+                    disclosure: open ? .open : .closed,
+                    onDisclosure: { toggle(key) },
+                    title: folder.displayName,
+                    subtitle: open || rollup.isEmpty ? nil : AnyView(rollup.view)
+                ) {
+                    Image(systemName: open ? "folder" : "folder.fill")
+                        .font(.system(size: 13))
+                        .foregroundStyle(Theme.link)
+                } accessory: {
+                    Text("\(contained.count)")
+                        .font(.system(size: 11))
+                        .monospacedDigit()
+                }
+                .background(dropHighlight(key), in: .rect(cornerRadius: 6))
+                .onTapGesture { withAnimation(.smooth(duration: 0.25)) { toggle(key) } }
+                .contextMenu { folderMenu(folder) }
+                .draggable("folder:\(key)")
+                .dropDestination(for: String.self) { payloads, _ in
+                    drop(payloads, into: folder)
+                } isTargeted: { setDropTarget(key, $0) }
+
+                if open {
+                    folderContents(folder, depth: depth + 1)
+                        .transition(.opacity.combined(with: .move(edge: .top)))
+                }
+            }
+            .clipped()
+        )
+    }
+
+    // MARK: - Projects
+
+    /// A project row and, if it is the open project, its views.
+    ///
+    /// Only the open project expands: with dozens of projects, a tree where
+    /// every project can show four children is a tree nobody can scan.
+    private func projectNode(_ project: Project, depth: Int, expandable: Bool = true) -> AnyView {
+        let key = "p:\(project.uuid.uuidString)"
+        let isOpenProject = destination.projectID == project.uuid
+        let expanded = expandable && isOpenProject && isOpen(key)
+        return AnyView(
+            VStack(alignment: .leading, spacing: 1) {
+                SidebarRow(
+                    depth: depth,
+                    disclosure: expandable ? (expanded ? .open : .closed) : .placeholder,
+                    isSelected: isOpenProject && !expanded && expandable,
+                    isEmphasized: isOpenProject && (expanded || !expandable),
+                    onDisclosure: {
+                        if isOpenProject { toggle(key) } else { open(project) }
+                    },
+                    title: project.name.isEmpty ? "Untitled Project" : project.name
+                ) {
+                    ProjectBadge(project: project)
+                } accessory: {
+                    projectSignals(project)
+                }
+                .background(dropHighlight(key), in: .rect(cornerRadius: 6))
+                .onTapGesture { open(project) }
+                .contextMenu { projectMenu(project) }
+                .draggable("project:\(project.uuid.uuidString)")
+                .dropDestination(for: String.self) { payloads, _ in
+                    drop(payloads, onto: project)
+                } isTargeted: { setDropTarget(key, $0) }
+
+                if expanded {
+                    ForEach(views(for: project)) { mode in
+                        viewRow(mode, of: project, depth: depth + 1)
+                    }
+                    .transition(.opacity.combined(with: .move(edge: .top)))
+                }
+            }
+            .clipped()
+        )
+    }
+
+    /// One signal per state, in the dot vocabulary: Claude at work, commands
+    /// running, then either done or a done/total count.
+    @ViewBuilder
+    private func projectSignals(_ project: Project) -> some View {
+        let agents = project.allItems.count { $0.agentState == .working }
+        let running = terminalStore?.model(for: project.uuid).runningCount ?? 0
+        HStack(spacing: 5) {
+            if agents > 0 {
+                Circle().fill(Theme.agent).frame(width: 6, height: 6)
+                    .help("Claude is working on \(agents) card\(agents == 1 ? "" : "s")")
+            }
+            if running > 0 {
+                Circle().fill(Theme.running).frame(width: 6, height: 6)
+                    .help("\(running) command\(running == 1 ? "" : "s") running")
+            }
+            if project.status == .completed {
+                Image(systemName: "checkmark")
+                    .font(.system(size: 10, weight: .bold))
+                    .foregroundStyle(Theme.running)
+            } else if project.totalCount > 0 {
+                Text("\(project.completedCount)/\(project.totalCount)")
+                    .font(.system(size: 11))
+                    .monospacedDigit()
+            }
+        }
+    }
+
+    /// The views worth listing under a project. List and Timeline are other
+    /// layouts of the same cards, so they share the Board row.
+    private func views(for project: Project) -> [BoardViewMode] {
+        var modes: [BoardViewMode] = [.board, .issues]
+        if project.hasRepository { modes += [.terminal, .files] }
+        return modes
+    }
+
+    private func viewRow(_ mode: BoardViewMode, of project: Project, depth: Int) -> some View {
+        let selected = destination.projectID == project.uuid && viewMode.sidebarGroup == mode
+        let running = terminalStore?.model(for: project.uuid).runningCount ?? 0
+        return SidebarRow(
+            depth: depth,
+            height: Theme.Sidebar.viewRowHeight,
+            disclosure: .placeholder,
+            isSelected: selected,
+            title: mode.title
+        ) {
+            Image(systemName: mode.symbol)
+                .font(.system(size: 11, weight: .medium))
+                .foregroundStyle(selected ? AnyShapeStyle(.white) : AnyShapeStyle(.secondary))
+        } accessory: {
+            switch mode {
+            case .board:
+                Text("\(project.openCount) open").font(.system(size: 11))
+            case .terminal where running > 0:
+                HStack(spacing: 5) {
+                    Circle().fill(selected ? .white : Theme.running).frame(width: 6, height: 6)
+                    Text("\(running) running").font(.system(size: 11))
+                }
+            default:
+                EmptyView()
+            }
+        }
+        .onTapGesture {
+            destination = .project(project.uuid)
+            if viewMode.sidebarGroup != mode { viewMode = mode }
+        }
+    }
+
+    // MARK: - Footer
+
+    private var footer: some View {
+        VStack(spacing: 2) {
+            HStack(spacing: 0) {
+                Button {
+                    newProjectFolder = nil
+                    editorTarget = .new
+                } label: {
+                    HStack(spacing: 8) {
+                        Image(systemName: "plus.circle")
+                            .font(.system(size: 14))
+                            .foregroundStyle(Theme.link)
+                        Text(isOpeningFolder ? "Opening…" : "New Project")
+                            .font(.system(size: 13))
+                        Spacer(minLength: 4)
+                        Text("⌘N").font(.system(size: 11)).foregroundStyle(.tertiary)
+                    }
+                    .padding(.horizontal, 8)
+                    .frame(height: Theme.Sidebar.rowHeight)
+                    .contentShape(.rect)
+                }
+                .buttonStyle(.plain)
+                .disabled(isOpeningFolder)
+
+                Menu {
+                    Button("Open Project Folder…") { openProjectFolder() }
+                    Divider()
+                    Button("New Workspace…") { beginFolderPrompt(.newFolder(parent: nil, moving: nil)) }
+                } label: {
+                    Image(systemName: "ellipsis")
+                }
+                .menuStyle(.borderlessButton)
+                .menuIndicator(.hidden)
+                .fixedSize()
+                .padding(.trailing, 6)
+                .help("Open a folder, or add a workspace")
+            }
+
+            Divider().padding(.horizontal, 8)
+
+            settingsRow
+        }
+        .padding(.horizontal, 10)
+        .padding(.bottom, 10)
+    }
+
+    /// Settings, carrying what is listening: the MCP server and Phone Access.
+    private var settingsRow: some View {
+        let selected = destination == .settings
+        let services = [isMCPRunning ? "MCP" : nil, isSharing ? "Phone" : nil].compactMap { $0 }
+        return SidebarRow(isSelected: selected, title: "Settings") {
+            Image(systemName: "slider.horizontal.3")
+                .font(.system(size: 13))
+                .foregroundStyle(selected ? AnyShapeStyle(.white) : AnyShapeStyle(.secondary))
+        } accessory: {
+            if !services.isEmpty {
+                HStack(spacing: 5) {
+                    Circle().fill(selected ? .white : Theme.running).frame(width: 6, height: 6)
+                    Text(services.joined(separator: " · "))
+                        .font(.system(size: 10, weight: .semibold))
+                }
+                .foregroundStyle(selected ? AnyShapeStyle(.white) : AnyShapeStyle(Theme.running))
+                .padding(.horizontal, 7)
+                .frame(height: 20)
+                .background((selected ? Color.white : Theme.running).opacity(0.16), in: .capsule)
+            }
+        }
+        .onTapGesture { destination = .settings }
+    }
+
+    // MARK: - Menus
+
+    @ViewBuilder
+    private func projectMenu(_ project: Project) -> some View {
+        Button("Open Board") { open(project, mode: .board) }
+        Button("Open Issues") { open(project, mode: .issues) }
+        if project.hasRepository {
+            Button("Open Terminal") { open(project, mode: .terminal) }
+            Button("Reveal in Finder") {
+                if let directory = project.repoDirectory {
+                    NSWorkspace.shared.activateFileViewerSelecting([directory])
+                }
+            }
+            Divider()
+            Button("Run All Commands") { startAllCommands(project) }
+                .disabled(!hasRunnableCommands(project))
+            if terminalStore?.model(for: project.uuid).hasRunning == true {
+                Button("Stop All Commands") { terminalStore?.model(for: project.uuid).stopAll() }
+            }
+        }
+
+        Divider()
+        Button(project.isPinned ? "Unpin" : "Pin to Sidebar") {
+            withAnimation(.snappy) { project.isPinned.toggle() }
+        }
+        Menu("Move to") {
+            Button(project.folder == nil ? "✓ No Folder" : "No Folder") {
+                withAnimation(.snappy) { SidebarMutations.move(project, into: nil, siblings: unfiled) }
+            }
+            Divider()
+            ForEach(folderChoices(), id: \.folder.uuid) { choice in
+                Button(choiceLabel(choice, current: project.folder)) {
+                    withAnimation(.snappy) {
+                        SidebarMutations.move(project, into: choice.folder, siblings: choice.folder.orderedProjects)
+                    }
+                }
+            }
+        }
+        Button("New Folder with Project…") {
+            beginFolderPrompt(.newFolder(parent: project.folder, moving: project))
+        }
+
+        Divider()
+        Button("Edit…") { editorTarget = .edit(project) }
+        Button("Duplicate") { BoardMutations.duplicate(project, in: context, existing: projects) }
+        Menu("Status") {
+            ForEach(ProjectStatus.allCases) { status in
+                Button(project.status == status ? "✓ \(status.title)" : status.title) {
+                    withAnimation(.snappy) { project.status = status }
+                }
+            }
+        }
+
+        Divider()
+        Button("Delete Project", role: .destructive) { delete(project) }
+    }
+
+    @ViewBuilder
+    private func folderMenu(_ folder: ProjectFolder) -> some View {
+        Button("New Project Here…") {
+            newProjectFolder = folder
+            editorTarget = .new
+        }
+        Button("New Folder…") { beginFolderPrompt(.newFolder(parent: folder, moving: nil)) }
+
+        Divider()
+        Button("Rename…") { beginFolderPrompt(.rename(folder)) }
+        Menu("Move to") {
+            Button(folder.isWorkspace ? "✓ Top Level" : "Top Level") {
+                withAnimation(.snappy) { SidebarMutations.move(folder, into: nil, context: context) }
+            }
+            Divider()
+            ForEach(folderChoices(excluding: folder), id: \.folder.uuid) { choice in
+                Button(choiceLabel(choice, current: folder.parent)) {
+                    withAnimation(.snappy) { SidebarMutations.move(folder, into: choice.folder, context: context) }
+                }
+            }
+        }
+        Divider()
+        Button(folder.isWorkspace ? "Delete Workspace…" : "Delete Folder…", role: .destructive) {
+            folderToDelete = folder
+        }
+    }
+
+    /// Every folder, depth-first, for "Move to". A folder being moved is left
+    /// out along with everything under it.
+    private func folderChoices(excluding moving: ProjectFolder? = nil) -> [(folder: ProjectFolder, depth: Int)] {
+        func walk(_ folder: ProjectFolder, _ depth: Int) -> [(folder: ProjectFolder, depth: Int)] {
+            if let moving, moving.contains(folder) { return [] }
+            return [(folder, depth)] + folder.orderedChildren.flatMap { walk($0, depth + 1) }
+        }
+        return workspaces.flatMap { walk($0, 0) }
+    }
+
+    private func choiceLabel(_ choice: (folder: ProjectFolder, depth: Int), current: ProjectFolder?) -> String {
+        let indent = String(repeating: "    ", count: choice.depth)
+        let mark = choice.folder.uuid == current?.uuid ? "✓ " : ""
+        return indent + mark + choice.folder.displayName
+    }
+
+    // MARK: - Drag and drop
+
+    /// Payloads are `project:<uuid>` or `folder:<uuid>` strings. `Transferable`
+    /// types would be tidier, but a plain string is what `.draggable` already
+    /// uses for projects elsewhere and needs no exported type declaration.
+    private func drop(_ payloads: [String], into folder: ProjectFolder?) -> Bool {
+        dropTargetKey = nil
+        guard let payload = payloads.first else { return false }
+        withAnimation(.snappy(duration: 0.22)) {
+            if let project = draggedProject(payload) {
+                SidebarMutations.move(project, into: folder, siblings: folder?.orderedProjects ?? unfiled)
+            } else if let dragged = draggedFolder(payload) {
+                SidebarMutations.move(dragged, into: folder, context: context)
+            }
+        }
+        if let folder { reveal(folder) }
+        return true
+    }
+
+    private func drop(_ payloads: [String], onto target: Project) -> Bool {
+        dropTargetKey = nil
+        guard let payload = payloads.first else { return false }
+        withAnimation(.snappy(duration: 0.22)) {
+            if let project = draggedProject(payload) {
+                let siblings = target.folder?.orderedProjects ?? unfiled
+                SidebarMutations.move(project, before: target, siblings: siblings)
+            } else if let dragged = draggedFolder(payload) {
+                SidebarMutations.move(dragged, into: target.folder, context: context)
+            }
+        }
+        return true
+    }
+
+    private func draggedProject(_ payload: String) -> Project? {
+        guard payload.hasPrefix("project:") else { return nil }
+        let id = payload.dropFirst("project:".count)
+        return projects.first { $0.uuid.uuidString == id }
+    }
+
+    private func draggedFolder(_ payload: String) -> ProjectFolder? {
+        guard payload.hasPrefix("folder:") else { return nil }
+        let id = payload.dropFirst("folder:".count)
+        return folders.first { $0.uuid.uuidString == id }
+    }
+
+    private func setDropTarget(_ key: String, _ targeted: Bool) {
+        if targeted { dropTargetKey = key } else if dropTargetKey == key { dropTargetKey = nil }
+    }
+
+    private func dropHighlight(_ key: String) -> AnyShapeStyle {
+        dropTargetKey == key ? AnyShapeStyle(Color.accentColor.opacity(0.22)) : AnyShapeStyle(Color.clear)
+    }
+
+    // MARK: - Folds
+
+    private var closedKeys: Set<String> { Set(closedRaw.split(separator: ",").map(String.init)) }
+    private var openedKeys: Set<String> { Set(openedRaw.split(separator: ",").map(String.init)) }
+
+    private func isOpen(_ key: String) -> Bool { !closedKeys.contains(key) }
+
+    private func toggle(_ key: String) {
+        var keys = closedKeys
+        if keys.contains(key) { keys.remove(key) } else { keys.insert(key) }
+        closedRaw = keys.sorted().joined(separator: ",")
+    }
+
+    private func toggleOpened(_ key: String) {
+        var keys = openedKeys
+        if keys.contains(key) { keys.remove(key) } else { keys.insert(key) }
+        openedRaw = keys.sorted().joined(separator: ",")
+    }
+
+    /// Opens every folder above `folder` and the folder itself, so whatever
+    /// was just moved or selected there is visible.
+    private func reveal(_ folder: ProjectFolder?) {
+        guard let folder else { return }
+        var keys = closedKeys
+        for ancestor in folder.path { keys.remove(ancestor.uuid.uuidString) }
+        closedRaw = keys.sorted().joined(separator: ",")
+    }
+
+    // MARK: - Actions
+
+    private func open(_ project: Project) {
+        destination = .project(project.uuid)
+        reveal(project.folder)
+    }
+
+    private func open(_ project: Project, mode: BoardViewMode) {
+        open(project)
+        viewMode = mode
+    }
+
+    private func beginFolderPrompt(_ prompt: FolderPrompt) {
+        if case .rename(let folder) = prompt { folderName = folder.name } else { folderName = "" }
+        folderPrompt = prompt
+    }
+
+    private func commitFolderPrompt() {
+        let name = folderName.trimmingCharacters(in: .whitespacesAndNewlines)
+        defer { folderPrompt = nil }
+        guard !name.isEmpty, let prompt = folderPrompt else { return }
+        withAnimation(.snappy) {
+            switch prompt {
+            case .newFolder(let parent, let moving):
+                let folder = SidebarMutations.createFolder(named: name, in: parent, context: context)
+                if let moving { SidebarMutations.move(moving, into: folder, siblings: []) }
+                reveal(folder)
+            case .rename(let folder):
+                folder.name = name
+            }
+        }
     }
 
     /// Picks a folder, resolves it through `gh`, and creates a project already
@@ -148,289 +849,30 @@ struct ProjectSidebar: View {
 
         let path = Project.canonicalRepoPath(directory)
         if let existing = projects.first(where: { $0.repoPath == path }) {
-            selection = existing.uuid
-            showIssues()
+            open(existing, mode: .issues)
             return
         }
 
         isOpeningFolder = true
         Task {
             defer { isOpeningFolder = false }
-            // Try to resolve a GitHub remote, but don't require one: a plain
-            // folder (no `.git`, or a repo without `origin`) still opens for the
+            // A plain folder (no `.git`, or no `origin`) still opens for the
             // board, terminal, files and Claude. Only a resolved remote gets the
             // Issues view, so only then do we jump to it.
             let repository = try? await GitHubCLI.repository(at: directory)
             let project: Project
             if let repository {
                 project = BoardMutations.createProject(
-                    forRepository: repository,
-                    at: directory,
-                    in: context,
-                    existing: projects
+                    forRepository: repository, at: directory, in: context, existing: projects
                 )
             } else {
                 project = BoardMutations.createProject(
-                    forFolderAt: directory,
-                    in: context,
-                    existing: projects
+                    forFolderAt: directory, in: context, existing: projects
                 )
             }
-            selection = project.uuid
-            if repository != nil { showIssues() }
+            open(project, mode: repository != nil ? .issues : .board)
         }
     }
-
-    private func showIssues() {
-        NotificationCenter.default.post(
-            name: .boardViewModeRequested,
-            object: nil,
-            userInfo: ["mode": BoardViewMode.issues.rawValue]
-        )
-    }
-
-    // MARK: - Sections
-
-    /// The non-finished lifecycle statuses. Ungrouped projects are sectioned by
-    /// these so changing a project's status actually moves it — before, Planning
-    /// and On Hold were lumped into one "Active" section and looked inert.
-    private static let activeStatuses: [ProjectStatus] = [.planning, .active, .onHold]
-
-    @ViewBuilder
-    private var activeContent: some View {
-        // User groups first — an explicit organization that wins over status.
-        ForEach(namedActiveGroups, id: \.name) { group in
-            groupSection(group.name, group.projects)
-        }
-        // Then everything ungrouped, split by lifecycle status so each has a home.
-        ForEach(Self.activeStatuses) { status in
-            statusSection(status.title, ungroupedActive.filter { $0.status == status })
-        }
-    }
-
-    /// A plain, always-open section: a header and its rows.
-    @ViewBuilder
-    private func statusSection(_ title: String, _ slice: [Project]) -> some View {
-        if !slice.isEmpty {
-            sectionHeader(title)
-            ForEach(slice, id: \.uuid) { project in
-                projectRow(project, in: slice)
-            }
-        }
-    }
-
-    /// A named group: collapsible, with an always-visible trailing chevron and,
-    /// when collapsed, a rollup of the group. Its rows sit in a VStack whose
-    /// height animates — the accordion `List` could not do.
-    @ViewBuilder
-    private func groupSection(_ name: String, _ group: [Project]) -> some View {
-        let collapsed = collapsedGroups.contains(name)
-        VStack(alignment: .leading, spacing: 2) {
-            Button {
-                withAnimation(.smooth(duration: 0.3)) { toggleGroup(name) }
-            } label: {
-                HStack(spacing: 6) {
-                    Text(name.uppercased())
-                        .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(.secondary)
-                    Spacer(minLength: 4)
-                    if collapsed { groupSummary(group) }
-                    Image(systemName: "chevron.right")
-                        .font(.system(size: 10, weight: .semibold))
-                        .foregroundStyle(.secondary)
-                        .rotationEffect(.degrees(collapsed ? 0 : 90))
-                }
-                .contentShape(.rect)
-                .padding(.horizontal, 8)
-                .padding(.top, 10)
-                .padding(.bottom, 1)
-            }
-            .buttonStyle(.plain)
-
-            if !collapsed {
-                VStack(alignment: .leading, spacing: 2) {
-                    ForEach(group, id: \.uuid) { project in
-                        projectRow(project, in: group)
-                    }
-                }
-                .transition(.move(edge: .top).combined(with: .opacity))
-            }
-        }
-        // Height animates; clip so rows don't spill past the header mid-slide.
-        .clipped()
-    }
-
-    private func sectionHeader(_ title: String) -> some View {
-        Text(title.uppercased())
-            .font(.system(size: 11, weight: .semibold))
-            .foregroundStyle(.secondary)
-            .padding(.horizontal, 8)
-            .padding(.top, 10)
-            .padding(.bottom, 1)
-            .frame(maxWidth: .infinity, alignment: .leading)
-    }
-
-    /// One project row. Selection, its highlight, and drag-reorder are all done
-    /// by hand here — the price of leaving `List` for a real accordion.
-    private func projectRow(_ project: Project, in slice: [Project]) -> some View {
-        ProjectRow(project: project)
-            .padding(.horizontal, 8)
-            .padding(.vertical, 4)
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .background(
-                selection == project.uuid ? Color.accentColor.opacity(0.20) : Color.clear,
-                in: .rect(cornerRadius: 6)
-            )
-            .contentShape(.rect)
-            .onTapGesture { selection = project.uuid }
-            .contextMenu { contextMenu(for: project) }
-            .draggable(project.uuid.uuidString)
-            .dropDestination(for: String.self) { items, _ in
-                guard let raw = items.first,
-                      let dragged = slice.first(where: { $0.uuid.uuidString == raw })
-                else { return false }
-                withAnimation(.snappy(duration: 0.2)) {
-                    reorder(slice, moving: dragged, before: project)
-                }
-                return true
-            }
-    }
-
-    private func toggleGroup(_ name: String) {
-        if collapsedGroups.contains(name) { collapsedGroups.remove(name) }
-        else { collapsedGroups.insert(name) }
-    }
-
-    // MARK: - Grouping data
-
-    /// Active projects split into user-defined groups, alphabetical, each
-    /// preserving `sortOrder`.
-    private var namedActiveGroups: [(name: String, projects: [Project])] {
-        var buckets: [String: [Project]] = [:]
-        for project in active {
-            guard let group = project.groupName, !group.isEmpty else { continue }
-            buckets[group, default: []].append(project)
-        }
-        return buckets.keys.sorted().map { ($0, buckets[$0]!) }
-    }
-
-    private var ungroupedActive: [Project] {
-        active.filter { ($0.groupName ?? "").isEmpty }
-    }
-
-    /// Every group name in use, for the "Group" context menu.
-    private var existingGroupNames: [String] {
-        Set(projects.compactMap(\.groupName).filter { !$0.isEmpty }).sorted()
-    }
-
-    /// Minimal rollup for a collapsed group: running commands, in-progress
-    /// cards, overdue cards — each a coloured dot with a count, shown only when
-    /// non-zero, in the same dot vocabulary the rows use.
-    @ViewBuilder
-    private func groupSummary(_ group: [Project]) -> some View {
-        let running = group.count { terminalStore?.model(for: $0.uuid).hasRunning == true }
-        let inProgress = group.reduce(0) { $0 + $1.inProgressCount }
-        let overdue = group.reduce(0) { $0 + $1.overdueCount }
-
-        HStack(spacing: 7) {
-            if running > 0 {
-                summaryDot(.green, running, "\(running) project\(running == 1 ? "" : "s") running commands")
-            }
-            if inProgress > 0 {
-                summaryDot(.blue, inProgress, "\(inProgress) card\(inProgress == 1 ? "" : "s") in progress")
-            }
-            if overdue > 0 {
-                summaryDot(.red, overdue, "\(overdue) overdue card\(overdue == 1 ? "" : "s")")
-            }
-        }
-    }
-
-    private func summaryDot(_ color: Color, _ count: Int, _ help: String) -> some View {
-        HStack(spacing: 3) {
-            Circle().fill(color).frame(width: 6, height: 6)
-            Text("\(count)")
-                .font(.system(size: 10, weight: .medium))
-                .monospacedDigit()
-                .foregroundStyle(.secondary)
-        }
-        .help(help)
-    }
-
-    // MARK: - Reordering
-
-    /// Moves `dragged` to just before `target` within a section, re-spacing that
-    /// section's `sortOrder`. Values only need to be consistent within the
-    /// section, which is how they are rendered.
-    private func reorder(_ slice: [Project], moving dragged: Project, before target: Project) {
-        guard dragged.uuid != target.uuid else { return }
-        var arr = slice.filter { $0.uuid != dragged.uuid }
-        guard let index = arr.firstIndex(where: { $0.uuid == target.uuid }) else { return }
-        arr.insert(dragged, at: index)
-        let orders = FractionalOrder.normalizedOrders(count: arr.count)
-        for (project, order) in zip(arr, orders) { project.sortOrder = order }
-    }
-
-    // MARK: - Context menu
-
-    @ViewBuilder
-    private func contextMenu(for project: Project) -> some View {
-        Button("Edit…") { editorTarget = .edit(project) }
-        Button("Duplicate") {
-            BoardMutations.duplicate(project, in: context, existing: projects)
-        }
-
-        if project.hasRepository {
-            Divider()
-            Button("Run All Commands") { startAllCommands(project) }
-                .disabled(!hasRunnableCommands(project))
-            if terminalStore?.model(for: project.uuid).hasRunning == true {
-                Button("Stop All Commands") { terminalStore?.model(for: project.uuid).stopAll() }
-            }
-        }
-
-        Divider()
-        groupMenu(for: project)
-        statusMenu(for: project)
-
-        Divider()
-        Button("Delete", role: .destructive) { delete(project) }
-    }
-
-    @ViewBuilder
-    private func groupMenu(for project: Project) -> some View {
-        Menu("Group") {
-            ForEach(existingGroupNames, id: \.self) { name in
-                Button {
-                    project.groupName = name
-                } label: {
-                    Label(name, systemImage: project.groupName == name ? "checkmark" : "folder")
-                }
-            }
-            if !existingGroupNames.isEmpty { Divider() }
-            Button("New Group…") {
-                newGroupName = ""
-                projectForNewGroup = project
-            }
-            if project.groupName != nil {
-                Button("Remove from Group") { project.groupName = nil }
-            }
-        }
-    }
-
-    @ViewBuilder
-    private func statusMenu(for project: Project) -> some View {
-        Menu("Status") {
-            ForEach(ProjectStatus.allCases) { status in
-                Button {
-                    project.status = status
-                } label: {
-                    Label(status.title, systemImage: project.status == status ? "checkmark" : status.symbol)
-                }
-            }
-        }
-    }
-
-    // MARK: - Commands
 
     private func hasRunnableCommands(_ project: Project) -> Bool {
         project.hasRepository
@@ -446,20 +888,101 @@ struct ProjectSidebar: View {
     /// Clearing the selection *before* deleting keeps the detail pane from
     /// rendering against a deallocated model object.
     private func delete(_ project: Project) {
-        if selection == project.uuid { selection = nil }
+        if destination.projectID == project.uuid { destination = .overview }
         context.delete(project)
+    }
+}
+
+/// The name prompt shared by New Folder, New Workspace and Rename.
+enum FolderPrompt {
+    /// `parent == nil` makes a workspace. `moving` is a project to file in the
+    /// new folder straight away.
+    case newFolder(parent: ProjectFolder?, moving: Project?)
+    case rename(ProjectFolder)
+
+    var title: String {
+        switch self {
+        case .newFolder(nil, _): "New Workspace"
+        case .newFolder: "New Folder"
+        case .rename(let folder): folder.isWorkspace ? "Rename Workspace" : "Rename Folder"
+        }
+    }
+
+    var confirmTitle: String {
+        if case .rename = self { return "Rename" }
+        return "Create"
+    }
+
+    var message: String {
+        switch self {
+        case .newFolder(nil, _):
+            "A top-level section — a client, a company, or Personal."
+        case .newFolder(let parent?, let moving):
+            moving.map { "A folder in “\(parent.displayName)” holding “\($0.name)”." }
+                ?? "A folder in “\(parent.displayName)”."
+        case .rename:
+            ""
+        }
+    }
+}
+
+extension BoardViewMode {
+    /// The sidebar row a mode lights up: List and Timeline are layouts of the
+    /// board's cards, so they light Board.
+    var sidebarGroup: BoardViewMode {
+        switch self {
+        case .board, .list, .timeline: .board
+        default: self
+        }
     }
 }
 
 #if DEBUG
 #Preview {
-    @Previewable @State var selection: UUID?
+    @Previewable @State var destination: AppDestination = .overview
+    @Previewable @State var mode: BoardViewMode = .board
     NavigationSplitView {
-        ProjectSidebar(selection: $selection)
+        ProjectSidebar(destination: $destination, viewMode: $mode)
     } detail: {
         Text("Detail")
     }
     .modelContainer(SampleData.container)
-    .frame(width: 900, height: 600)
+    .frame(width: 900, height: 700)
 }
 #endif
+
+/// Clears the text-field focus AppKit hands out when a window first becomes
+/// key, once. Later focus — ⌘⇧F, a click — is left alone.
+private struct InitialFocusResigner: NSViewRepresentable {
+    func makeNSView(context: Context) -> NSView { ResignerView() }
+    func updateNSView(_ nsView: NSView, context: Context) {}
+
+    private final class ResignerView: NSView {
+        private var observer: NSObjectProtocol?
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            guard let window, observer == nil else { return }
+            // Already key: resign now, and never again — coming back to the
+            // app later must not take away focus the user gave the field.
+            if window.isKeyWindow { return resign(in: window) }
+            observer = NotificationCenter.default.addObserver(
+                forName: NSWindow.didBecomeKeyNotification, object: window, queue: .main
+            ) { [weak self] _ in
+                MainActor.assumeIsolated { self?.resignOnce() }
+            }
+        }
+
+        private func resignOnce() {
+            guard let window else { return }
+            resign(in: window)
+            if let observer { NotificationCenter.default.removeObserver(observer) }
+        }
+
+        private func resign(in window: NSWindow) {
+            DispatchQueue.main.async {
+                if window.firstResponder is NSText { window.makeFirstResponder(nil) }
+            }
+        }
+    }
+}

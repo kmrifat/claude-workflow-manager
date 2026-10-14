@@ -2,10 +2,10 @@
 //
 // Drawn rather than mocked up in a design tool for the same reason
 // RenderAppIcon.swift is: the palette and the mark live in one place, so a
-// change to the product's colours cannot leave the banner behind. The mark
-// geometry here is deliberately the same as the icon's — three columns filling
-// left to right, the single claimed card picked out in amber — because a banner
-// that shows a different mark than the dock icon reads as a different product.
+// change to the product's colours cannot leave the banner behind. The tower
+// here is deliberately the icon's own — same rows, same orange-red leader, same
+// signal dot — because a banner that shows a different mark than the Dock icon
+// reads as a different product.
 //
 // Usage:
 //   xcrun swift Tools/RenderBanner.swift <repo-root>
@@ -31,65 +31,135 @@ func rgb(_ hex: UInt32, _ a: CGFloat = 1) -> CGColor {
     )
 }
 
-let deepTeal  = rgb(0x0F5F58)
-let darkTeal  = rgb(0x06232A)
-let cardLight = rgb(0xEDF5F3)
-let amber     = rgb(0xE9A63E)
+let midnightTop    = rgb(0x1C2A4A)
+let midnightBottom = rgb(0x080D1A)
+let accentStart    = rgb(0xF2380F)
+let accentEnd      = rgb(0xFF7A3D)
+let accent         = rgb(0xFF4F1F)
+let paper          = rgb(0xF3F3F6)
+let paperShade     = rgb(0xD9DEE8)
+
+let sRGB = CGColorSpace(name: CGColorSpace.sRGB)!
 
 func roundedPath(_ rect: CGRect, _ radius: CGFloat) -> CGPath {
     CGPath(roundedRect: rect, cornerWidth: radius, cornerHeight: radius, transform: nil)
 }
 
-// MARK: - The mark
-//
-// The 1024-unit box and every number in it are the icon's. Callers scale.
+func gradient(_ colors: [CGColor]) -> CGGradient {
+    CGGradient(colorsSpace: sRGB, colors: colors as CFArray, locations: [0, 1])!
+}
 
-func drawMark(_ ctx: CGContext, box: CGRect) {
-    ctx.saveGState()
-    ctx.translateBy(x: box.minX, y: box.minY)
-    let k = box.width / 1024
-    ctx.scaleBy(x: k, y: k)
+// MARK: - The tower
 
-    let columnWidth: CGFloat = 190
-    let gap: CGFloat = 68
-    let xs: [CGFloat] = [159, 159 + columnWidth + gap, 159 + 2 * (columnWidth + gap)]
+/// One row of the tower, in body units.
+struct Row {
+    var y: CGFloat
+    var barWidth: CGFloat
+    enum Kind { case leader, signal, faded(CGFloat) }
+    var kind: Kind
+}
 
-    let headerY: CGFloat = 223
-    let headerH: CGFloat = 28
-    let cardH: CGFloat = 150
-    let cardGap: CGFloat = 30
-    let firstCardY: CGFloat = 291
-    let counts = [3, 2, 1]
+struct Layout {
+    var rowHeight: CGFloat
+    var chipX: CGFloat
+    var barX: CGFloat
+    var rows: [Row]
+    var dot: CGFloat
 
-    for x in xs {
-        ctx.setFillColor(rgb(0xFFFFFF, 0.30))
-        ctx.addPath(roundedPath(
-            CGRect(x: x, y: headerY, width: columnWidth, height: headerH),
-            headerH / 2
-        ))
-        ctx.fillPath()
+    /// Four rows: the design as drawn.
+    static let full = Layout(
+        rowHeight: 50, chipX: 56, barX: 122,
+        rows: [
+            Row(y: 73,  barWidth: 234, kind: .leader),
+            Row(y: 145, barWidth: 190, kind: .signal),
+            Row(y: 217, barWidth: 150, kind: .faded(0.55)),
+            Row(y: 289, barWidth: 108, kind: .faded(0.30)),
+        ],
+        dot: 18
+    )
+
+    /// Three thicker rows for 32 px and below. Four 1.5 px bars at 16 px read
+    /// as hatching; three bars still read as a tower with a lit leader.
+    static let small = Layout(
+        rowHeight: 66, chipX: 52, barX: 134,
+        rows: [
+            Row(y: 84,  barWidth: 230, kind: .leader),
+            Row(y: 173, barWidth: 180, kind: .signal),
+            Row(y: 262, barWidth: 124, kind: .faded(0.50)),
+        ],
+        dot: 26
+    )
+}
+
+/// Draws the tower into `body`, a square in canvas coordinates.
+func drawTower(_ ctx: CGContext, body: CGRect, layout: Layout, glow: Bool) {
+    let k = body.width / 412
+    func r(_ x: CGFloat, _ y: CGFloat, _ w: CGFloat, _ h: CGFloat) -> CGRect {
+        CGRect(x: body.minX + x * k, y: body.minY + y * k, width: w * k, height: h * k)
     }
+    let h = layout.rowHeight
 
-    for (column, x) in xs.enumerated() {
-        for row in 0..<counts[column] {
-            let isClaimed = (column == 2)
-            let lift: CGFloat = isClaimed ? 18 : 0
-            let y = firstCardY + CGFloat(row) * (cardH + cardGap) - lift
-            let rect = CGRect(x: x, y: y, width: columnWidth, height: cardH)
+    for row in layout.rows {
+        // The position chip on the left.
+        let chip = r(layout.chipX, row.y, h, h)
+        switch row.kind {
+        case .leader: ctx.setFillColor(rgb(0xFF4F1F, 0.35))
+        case .signal: ctx.setFillColor(rgb(0xFFFFFF, 0.12))
+        case .faded(let a): ctx.setFillColor(rgb(0xFFFFFF, a * 0.15))
+        }
+        ctx.addPath(roundedPath(chip, h * 0.28 * k))
+        ctx.fillPath()
 
-            if isClaimed {
-                ctx.saveGState()
-                ctx.setShadow(offset: CGSize(width: 0, height: 16), blur: 34,
-                              color: rgb(0x000000, 0.42))
+        // The bar.
+        let bar = r(layout.barX, row.y, row.barWidth, h)
+        let barPath = roundedPath(bar, h / 2 * k)
+        switch row.kind {
+        case .leader:
+            ctx.saveGState()
+            if glow {
+                ctx.setShadow(offset: .zero, blur: 30 * k, color: rgb(0xFF4F1F, 0.65))
+                ctx.setFillColor(accent)
+                ctx.addPath(barPath)
+                ctx.fillPath()
             }
-            ctx.setFillColor(isClaimed ? amber : cardLight)
-            ctx.addPath(roundedPath(rect, 30))
+            ctx.addPath(barPath)
+            ctx.clip()
+            ctx.drawLinearGradient(gradient([accentStart, accentEnd]),
+                                   start: CGPoint(x: bar.minX, y: bar.midY),
+                                   end: CGPoint(x: bar.maxX, y: bar.midY), options: [])
+            ctx.restoreGState()
+        case .signal:
+            ctx.saveGState()
+            ctx.addPath(barPath)
+            ctx.clip()
+            ctx.drawLinearGradient(gradient([rgb(0xFFFFFF), paperShade]),
+                                   start: CGPoint(x: bar.midX, y: bar.minY),
+                                   end: CGPoint(x: bar.midX, y: bar.maxY), options: [])
+            ctx.restoreGState()
+        case .faded(let a):
+            ctx.setFillColor(rgb(0xF3F3F6, a))
+            ctx.addPath(barPath)
             ctx.fillPath()
-            if isClaimed { ctx.restoreGState() }
+        }
+
+        // The dot at the bar's end: white and live on the leader, the accent
+        // on the next — the one asking for you.
+        let d = layout.dot
+        let dotRect = r(layout.barX + row.barWidth - (h - d) / 2 - d, row.y + (h - d) / 2, d, d)
+        switch row.kind {
+        case .leader:
+            ctx.setFillColor(rgb(0xFFFFFF))
+            ctx.fillEllipse(in: dotRect)
+        case .signal:
+            ctx.saveGState()
+            if glow { ctx.setShadow(offset: .zero, blur: 10 * k, color: rgb(0xFF4F1F, 0.65)) }
+            ctx.setFillColor(accent)
+            ctx.fillEllipse(in: dotRect)
+            ctx.restoreGState()
+        case .faded:
+            break
         }
     }
-
-    ctx.restoreGState()
 }
 
 // MARK: - Text
@@ -156,59 +226,33 @@ ctx.scaleBy(x: 1, y: -1)
 ctx.interpolationQuality = .high
 ctx.setAllowsAntialiasing(true)
 
-// Ground: the icon's diagonal gradient, run across a much wider box so the
-// right-hand end stays dark enough for white text to sit on it.
-let ground = CGGradient(
-    colorsSpace: CGColorSpace(name: CGColorSpace.sRGB)!,
-    colors: [deepTeal, darkTeal] as CFArray,
-    locations: [0, 1]
-)!
-ctx.drawLinearGradient(
-    ground,
-    start: CGPoint(x: 0, y: 0),
-    end: CGPoint(x: W, y: H),
-    options: []
-)
+// Ground: the icon's midnight, run across a much wider box so the right-hand
+// end stays dark enough for white text to sit on it.
+ctx.drawLinearGradient(gradient([midnightTop, midnightBottom]),
+                       start: CGPoint(x: 0, y: 0), end: CGPoint(x: W * 0.55, y: H),
+                       options: [.drawsAfterEndLocation])
 
-// The same top-left sheen the icon has, so the two read as one surface.
-let sheen = CGGradient(
-    colorsSpace: CGColorSpace(name: CGColorSpace.sRGB)!,
-    colors: [rgb(0x8FE8DF, 0.18), rgb(0x8FE8DF, 0.0)] as CFArray,
-    locations: [0, 1]
-)!
+// A faint orange-red wash behind the tile, aimed at the leader bar. Well under
+// the point of notice — it exists so the left half is not flat navy.
 ctx.drawRadialGradient(
-    sheen,
-    startCenter: CGPoint(x: W * 0.18, y: H * 0.10), startRadius: 0,
-    endCenter: CGPoint(x: W * 0.18, y: H * 0.10), endRadius: W * 0.55,
-    options: []
-)
-
-// A faint amber wash behind the tile, aimed at the claimed card. Well under the
-// point of notice — it exists so the right half is not flat black-green.
-let warmth = CGGradient(
-    colorsSpace: CGColorSpace(name: CGColorSpace.sRGB)!,
-    colors: [rgb(0xE9A63E, 0.13), rgb(0xE9A63E, 0.0)] as CFArray,
-    locations: [0, 1]
-)!
-ctx.drawRadialGradient(
-    warmth,
-    startCenter: CGPoint(x: W * 0.20, y: H * 0.62), startRadius: 0,
-    endCenter: CGPoint(x: W * 0.20, y: H * 0.62), endRadius: W * 0.30,
+    gradient([rgb(0xFF4F1F, 0.14), rgb(0xFF4F1F, 0)]),
+    startCenter: CGPoint(x: W * 0.17, y: H * 0.40), startRadius: 0,
+    endCenter: CGPoint(x: W * 0.17, y: H * 0.40), endRadius: W * 0.28,
     options: []
 )
 
 // --- The icon tile -----------------------------------------------------------
 //
 // Drawn as the app's own rounded plate rather than a bare mark, so the banner
-// shows the thing that will actually be in the reader's dock.
+// shows the thing that will actually be in the reader's Dock.
 
 let tileSize: CGFloat = 380
 let tile = CGRect(x: 150, y: (H - tileSize) / 2, width: tileSize, height: tileSize)
 let tileRadius = tileSize * 0.2237
 
 ctx.saveGState()
-ctx.setShadow(offset: CGSize(width: 0, height: 14), blur: 40, color: rgb(0x000000, 0.45))
-ctx.setFillColor(rgb(0x0A3138))
+ctx.setShadow(offset: CGSize(width: 0, height: 14), blur: 40, color: rgb(0x000000, 0.55))
+ctx.setFillColor(midnightBottom)
 ctx.addPath(roundedPath(tile, tileRadius))
 ctx.fillPath()
 ctx.restoreGState()
@@ -216,18 +260,17 @@ ctx.restoreGState()
 ctx.saveGState()
 ctx.addPath(roundedPath(tile, tileRadius))
 ctx.clip()
-ctx.drawLinearGradient(
-    ground,
-    start: CGPoint(x: tile.minX, y: tile.minY),
-    end: CGPoint(x: tile.maxX, y: tile.maxY),
-    options: []
-)
-drawMark(ctx, box: tile.insetBy(dx: tileSize * 0.06, dy: tileSize * 0.06))
+ctx.drawLinearGradient(gradient([midnightTop, midnightBottom]),
+                       start: CGPoint(x: tile.midX, y: tile.minY),
+                       end: CGPoint(x: tile.midX, y: tile.maxY), options: [])
+ctx.drawLinearGradient(gradient([rgb(0xFFFFFF, 0.08), rgb(0xFFFFFF, 0)]),
+                       start: CGPoint(x: tile.midX, y: tile.minY),
+                       end: CGPoint(x: tile.midX, y: tile.midY), options: [])
+drawTower(ctx, body: tile, layout: .full, glow: true)
 ctx.restoreGState()
 
-// A hairline lip along the top edge, which is what keeps the tile from looking
-// pasted on.
-ctx.setStrokeColor(rgb(0xFFFFFF, 0.10))
+// The icon's hairline edge, which is what keeps the tile from looking pasted on.
+ctx.setStrokeColor(rgb(0xFFFFFF, 0.14))
 ctx.setLineWidth(2)
 ctx.addPath(roundedPath(tile.insetBy(dx: 1, dy: 1), tileRadius))
 ctx.strokePath()
@@ -236,15 +279,15 @@ ctx.strokePath()
 
 let textX = tile.maxX + 110
 
-draw("Claude WM", ctx,
+draw("Pitwall", ctx,
      x: textX, baseline: 235,
      font: font(132, .bold), color: rgb(0xFFFFFF), tracking: -3)
 
-draw("A macOS kanban board that mirrors your GitHub issues", ctx,
+draw("Every project you run on one macOS board, GitHub", ctx,
      x: textX, baseline: 317,
      font: font(46, .regular), color: rgb(0xFFFFFF, 0.72))
 
-draw("and hands work to Claude Code — without leaving the window.", ctx,
+draw("issues included — with Claude Code working the cards.", ctx,
      x: textX, baseline: 381,
      font: font(46, .regular), color: rgb(0xFFFFFF, 0.72))
 

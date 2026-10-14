@@ -37,8 +37,11 @@ final class TestClient {
         // The client must dial an `NWEndpoint.url`, not host+port: the upgrade
         // is an HTTP request that needs a path and a Host header. Host+port
         // completes the TLS handshake and *then* aborts with POSIX 53.
-        let url = URL(string: "wss://127.0.0.1:\(port)/")!
-        let connection = NWConnection(to: .url(url), using: BoardTransport.parameters(key: key))
+        //
+        // Built by the phone's own `remoteEndpoint`, the path a phone away from
+        // the Wi-Fi takes to a Mac's tailnet name — so this covers it too.
+        let endpoint = BoardTransport.remoteEndpoint(host: "127.0.0.1", port: port)!
+        let connection = NWConnection(to: endpoint, using: BoardTransport.parameters(key: key))
         self.connection = connection
         connection.start(queue: queue)
         receive(on: connection)
@@ -125,7 +128,23 @@ let outcome: Void = try MainActor.assumeIsolated {
     let terminals = TerminalStateStore()
     service.attachRepositoryAccess(terminals: terminals)
     server.handler = service
-    server.start(key: key, serviceName: "Loopback Harness")
+    // The fixed port remote access uses, so the dial below is the one a phone
+    // makes over Tailscale: a known port, no Bonjour.
+    server.start(key: key, serviceName: "Loopback Harness", port: TailnetAccess.phonePort)
+
+    // The pairing code survives the trip from the Mac's encoder to the
+    // phone's decoder with the tailnet host and port intact — and a code
+    // without them still decodes, which is what keeps old codes working.
+    let remoteCode = try? BoardPairing.url(for: BoardPairing.Payload(
+        key: key, service: "Loopback Harness", mac: "Loopback Harness",
+        host: "harness.tail-test.ts.net", port: TailnetAccess.phonePort
+    ))
+    let decoded = remoteCode.flatMap { try? BoardPairingCode.payload(from: $0) }
+    check("pairing code carries the tailnet host to the phone",
+          decoded?.host == "harness.tail-test.ts.net" && decoded?.port == TailnetAccess.phonePort)
+    let plainCode = try? BoardPairing.url(for: BoardPairing.Payload(key: key, service: "S", mac: "M"))
+    let plain = plainCode.flatMap { try? BoardPairingCode.payload(from: $0) }
+    check("a code without a host still pairs", plain != nil && plain?.host == nil)
 
     var port: UInt16 = 0
     for _ in 0..<50 {

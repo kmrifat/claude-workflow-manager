@@ -24,7 +24,6 @@ struct BoardSharingView: View {
     /// and the thing it switches cannot drift apart.
     @AppStorage(RemoteAccess.defaultsKey) private var repositoryAccess = false
 
-    @State private var pairingURL: URL?
     @State private var push = PushRegistry.shared
     @State private var pastedKey = ""
     @State private var showsKeyField = false
@@ -106,7 +105,7 @@ struct BoardSharingView: View {
             Text("Control this board from your phone")
                 .font(.headline)
             Text("""
-                Claude WM can serve your boards to the Claude WM app on your \
+                Pitwall can serve your boards to the Pitwall app on your \
                 phone, over your local Wi-Fi only. Nothing is published to the \
                 internet and nothing is sent to a server.
 
@@ -124,7 +123,11 @@ struct BoardSharingView: View {
             Text("Scan with your phone")
                 .font(.headline)
 
-            if let pairingURL, let image = BoardPairing.qrCode(for: pairingURL) {
+            // Built live rather than kept from `start()`: reopening this sheet
+            // while serving, or remote access changing, must show the code that
+            // is true now.
+            if let pairingURL = server.pairingURL(tailnet: TailnetAccess.shared.phoneNode),
+               let image = BoardPairing.qrCode(for: pairingURL) {
                 HStack {
                     Spacer()
                     Image(decorative: image, scale: 1)
@@ -257,7 +260,7 @@ struct BoardSharingView: View {
     @ViewBuilder
     private var pushSetup: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Notifications reach your phone only while Claude WM is open on it — iOS suspends the app seconds after the screen goes off. An Apple push key lets this Mac notify it while it sleeps. Only phones that aren’t currently connected get a push, so you never see the same move twice.")
+            Text("Notifications reach your phone only while Pitwall is open on it — iOS suspends the app seconds after the screen goes off. An Apple push key lets this Mac notify it while it sleeps. Only phones that aren’t currently connected get a push, so you never see the same move twice.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -344,12 +347,7 @@ struct BoardSharingView: View {
     // MARK: - Actions
 
     private func start() {
-        let key = BoardPairing.currentKey()
-        let name = BoardServer.defaultServiceName
-        server.start(key: key, serviceName: name)
-        pairingURL = try? BoardPairing.url(
-            for: BoardPairing.Payload(key: key, service: name, mac: name)
-        )
+        server.startPhoneAccess(tailnet: TailnetAccess.shared.phoneNode)
     }
 
     private func rotate() {

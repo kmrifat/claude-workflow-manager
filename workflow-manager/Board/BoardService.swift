@@ -130,7 +130,7 @@ final class BoardService: BoardServerHandler {
         case .unrecognized(let type):
             server.send(.failure(WireFailure(
                 code: .unsupportedMutation,
-                message: "This Mac doesn’t understand “\(type)”. Update Claude WM."
+                message: "This Mac doesn’t understand “\(type)”. Update Pitwall."
             )), to: client)
         }
     }

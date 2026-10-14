@@ -48,3 +48,7 @@ xcuserdata/
 
 # macOS
 .DS_Store
+
+# The OpenPencil redesign and its PNGs are drawn over the real board, so they
+# carry client project names. Local only — never commit them to this public repo.
+/design/

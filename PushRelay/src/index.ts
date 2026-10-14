@@ -1,5 +1,5 @@
 /**
- * Claude WM push relay.
+ * Pitwall push relay.
  *
  * One job: take a notice from someone's Mac, sign it with the APNs key that
  * lives only here, and hand it to Apple.
