@@ -528,7 +528,7 @@ struct SettingsView: View {
                 .font(.system(size: 16))
                 .foregroundStyle(Theme.link)
             VStack(alignment: .leading, spacing: 2) {
-                Text("Install Tailscale to use Claude WM away from home")
+                Text("Install Tailscale to use Pitwall away from home")
                     .font(.system(size: 13, weight: .medium))
                 Text("Install it on this Mac and on your phone, sign both in to the same tailnet, then come back here. It is free for personal use.")
                     .font(.system(size: 11))

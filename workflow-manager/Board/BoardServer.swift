@@ -2,7 +2,7 @@
 //  BoardServer.swift
 //  workflow-manager
 //
-//  The listener Claude WM offers to its phone client. Transport only: it knows
+//  The listener Pitwall offers to its phone client. Transport only: it knows
 //  about sockets, TLS and frames, and nothing about boards. What a message
 //  *means* is `BoardService`'s problem.
 //
@@ -247,7 +247,7 @@ final class BoardServer {
             guard !frame.isFromNewerPeer else {
                 send(.failure(WireFailure(
                     code: .versionMismatch,
-                    message: "This Mac speaks board protocol \(WireProtocol.version); the app speaks \(frame.version). Update Claude WM."
+                    message: "This Mac speaks board protocol \(WireProtocol.version); the app speaks \(frame.version). Update Pitwall."
                 )), to: id)
                 return
             }
@@ -323,8 +323,12 @@ final class BoardServer {
     static let pskIdentity = "claude-wm-board"
 
     /// What the phone sees in a list of Macs. The host name rather than a fixed
-    /// string, because two Macs on one network advertising "Claude WM" tells the
-    /// user nothing about which is theirs.
+    /// string, because two Macs on one network advertising the app's name tells
+    /// the user nothing about which is theirs.
+    ///
+    /// Still "Claude WM", the app's old name, and it has to stay: a paired phone
+    /// finds its Mac by this exact Bonjour name (`BoardBrowser.endpoint(named:)`),
+    /// so renaming it would silently unpair every phone.
     static var defaultServiceName: String {
         let host = Host.current().localizedName ?? ProcessInfo.processInfo.hostName
         return "Claude WM on \(host)"

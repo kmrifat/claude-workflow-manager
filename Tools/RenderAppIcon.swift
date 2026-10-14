@@ -1,12 +1,20 @@
-// Renders the Claude WM app icon at every size Xcode wants.
+// Renders the Pitwall app icon at every size Xcode wants.
 //
 // Drawn rather than exported so every size is rendered at its own resolution —
-// downscaling a 1024 master turns the 16pt card gaps into grey mush.
+// downscaling a 1024 master turns thin bars into grey mush.
 //
-// The mark: three kanban columns, filling left to right, with the single card in
-// the last column picked out in amber and lifted. That card is the product —
-// work that has been claimed. At 16pt the amber square is still the one thing
-// you see, which is the test a small icon has to pass.
+// The mark is a timing tower, the screen on a race team's pit wall: one bar per
+// project, the leader lit in orange-red with a live dot, the next carrying an
+// orange-red "needs you" signal, the rest fading back. Orange-red is the only
+// accent; everything else is midnight and white. The design lives in
+// design/ClaudeWM.fig › Branding · Pitwall (local only — see .gitignore).
+//
+// Coordinates below are in the design's 412-unit body, the art area of a
+// 512-unit canvas (Apple's 824-of-1024 grid at half scale).
+//
+// Run from the repository root:
+//
+//   swift Tools/RenderAppIcon.swift .
 
 import Foundation
 import CoreGraphics
@@ -24,73 +32,135 @@ func rgb(_ hex: UInt32, _ a: CGFloat = 1) -> CGColor {
     )
 }
 
-let deepTeal  = rgb(0x0F5F58)
-let darkTeal  = rgb(0x06232A)
-let cardLight = rgb(0xEDF5F3)
-let amber     = rgb(0xE9A63E)
+let midnightTop    = rgb(0x1C2A4A)
+let midnightBottom = rgb(0x080D1A)
+let accentStart    = rgb(0xF2380F)
+let accentEnd      = rgb(0xFF7A3D)
+let accent         = rgb(0xFF4F1F)
+let paper          = rgb(0xF3F3F6)
+let paperShade     = rgb(0xD9DEE8)
 
-// MARK: - Geometry helpers
+let sRGB = CGColorSpace(name: CGColorSpace.sRGB)!
 
-/// Apple's icon grid: the art sits in 824 of 1024, with a continuous corner.
-/// Approximated with a circular corner, which is indistinguishable at this
-/// radius once the icon is on a dock.
 func roundedPath(_ rect: CGRect, _ radius: CGFloat) -> CGPath {
     CGPath(roundedRect: rect, cornerWidth: radius, cornerHeight: radius, transform: nil)
 }
 
-/// The mark, drawn into a 1024-unit box. Callers scale the box.
-func drawMark(_ ctx: CGContext, box: CGRect) {
-    ctx.saveGState()
-    ctx.translateBy(x: box.minX, y: box.minY)
-    let k = box.width / 1024
-    ctx.scaleBy(x: k, y: k)
+func gradient(_ colors: [CGColor]) -> CGGradient {
+    CGGradient(colorsSpace: sRGB, colors: colors as CFArray, locations: [0, 1])!
+}
 
-    // Sized so the mark fills roughly 69% of the box across and 56% down.
-    // The first cut used 64/47 and read timid — a mark that small leaves the
-    // plate looking like a frame around nothing.
-    let columnWidth: CGFloat = 190
-    let gap: CGFloat = 68
-    let xs: [CGFloat] = [159, 159 + columnWidth + gap, 159 + 2 * (columnWidth + gap)]
+// MARK: - The tower
 
-    let headerY: CGFloat = 223
-    let headerH: CGFloat = 28
-    let cardH: CGFloat = 150
-    let cardGap: CGFloat = 30
-    let firstCardY: CGFloat = 291
-    let counts = [3, 2, 1]
+/// One row of the tower, in body units.
+struct Row {
+    var y: CGFloat
+    var barWidth: CGFloat
+    enum Kind { case leader, signal, faded(CGFloat) }
+    var kind: Kind
+}
 
-    // Column headers — these are what stop the mark reading as a bar chart.
-    for x in xs {
-        ctx.setFillColor(rgb(0xFFFFFF, 0.30))
-        ctx.addPath(roundedPath(
-            CGRect(x: x, y: headerY, width: columnWidth, height: headerH),
-            headerH / 2
-        ))
-        ctx.fillPath()
+struct Layout {
+    var rowHeight: CGFloat
+    var chipX: CGFloat
+    var barX: CGFloat
+    var rows: [Row]
+    var dot: CGFloat
+
+    /// Four rows: the design as drawn.
+    static let full = Layout(
+        rowHeight: 50, chipX: 56, barX: 122,
+        rows: [
+            Row(y: 73,  barWidth: 234, kind: .leader),
+            Row(y: 145, barWidth: 190, kind: .signal),
+            Row(y: 217, barWidth: 150, kind: .faded(0.55)),
+            Row(y: 289, barWidth: 108, kind: .faded(0.30)),
+        ],
+        dot: 18
+    )
+
+    /// Three thicker rows for 32 px and below. Four 1.5 px bars at 16 px read
+    /// as hatching; three bars still read as a tower with a lit leader.
+    static let small = Layout(
+        rowHeight: 66, chipX: 52, barX: 134,
+        rows: [
+            Row(y: 84,  barWidth: 230, kind: .leader),
+            Row(y: 173, barWidth: 180, kind: .signal),
+            Row(y: 262, barWidth: 124, kind: .faded(0.50)),
+        ],
+        dot: 26
+    )
+}
+
+/// Draws the tower into `body`, a square in canvas coordinates.
+func drawTower(_ ctx: CGContext, body: CGRect, layout: Layout, glow: Bool) {
+    let k = body.width / 412
+    func r(_ x: CGFloat, _ y: CGFloat, _ w: CGFloat, _ h: CGFloat) -> CGRect {
+        CGRect(x: body.minX + x * k, y: body.minY + y * k, width: w * k, height: h * k)
     }
+    let h = layout.rowHeight
 
-    for (column, x) in xs.enumerated() {
-        for row in 0..<counts[column] {
-            let isClaimed = (column == 2)
-            // The claimed card sits a little proud of the others. Invisible at
-            // 16pt, but it gives the large sizes somewhere for the eye to land.
-            let lift: CGFloat = isClaimed ? 18 : 0
-            let y = firstCardY + CGFloat(row) * (cardH + cardGap) - lift
-            let rect = CGRect(x: x, y: y, width: columnWidth, height: cardH)
+    for row in layout.rows {
+        // The position chip on the left.
+        let chip = r(layout.chipX, row.y, h, h)
+        switch row.kind {
+        case .leader: ctx.setFillColor(rgb(0xFF4F1F, 0.35))
+        case .signal: ctx.setFillColor(rgb(0xFFFFFF, 0.12))
+        case .faded(let a): ctx.setFillColor(rgb(0xFFFFFF, a * 0.15))
+        }
+        ctx.addPath(roundedPath(chip, h * 0.28 * k))
+        ctx.fillPath()
 
-            if isClaimed {
-                ctx.saveGState()
-                ctx.setShadow(offset: CGSize(width: 0, height: 16), blur: 34,
-                              color: rgb(0x000000, 0.42))
+        // The bar.
+        let bar = r(layout.barX, row.y, row.barWidth, h)
+        let barPath = roundedPath(bar, h / 2 * k)
+        switch row.kind {
+        case .leader:
+            ctx.saveGState()
+            if glow {
+                ctx.setShadow(offset: .zero, blur: 30 * k, color: rgb(0xFF4F1F, 0.65))
+                ctx.setFillColor(accent)
+                ctx.addPath(barPath)
+                ctx.fillPath()
             }
-            ctx.setFillColor(isClaimed ? amber : cardLight)
-            ctx.addPath(roundedPath(rect, 30))
+            ctx.addPath(barPath)
+            ctx.clip()
+            ctx.drawLinearGradient(gradient([accentStart, accentEnd]),
+                                   start: CGPoint(x: bar.minX, y: bar.midY),
+                                   end: CGPoint(x: bar.maxX, y: bar.midY), options: [])
+            ctx.restoreGState()
+        case .signal:
+            ctx.saveGState()
+            ctx.addPath(barPath)
+            ctx.clip()
+            ctx.drawLinearGradient(gradient([rgb(0xFFFFFF), paperShade]),
+                                   start: CGPoint(x: bar.midX, y: bar.minY),
+                                   end: CGPoint(x: bar.midX, y: bar.maxY), options: [])
+            ctx.restoreGState()
+        case .faded(let a):
+            ctx.setFillColor(rgb(0xF3F3F6, a))
+            ctx.addPath(barPath)
             ctx.fillPath()
-            if isClaimed { ctx.restoreGState() }
+        }
+
+        // The dot at the bar's end: white and live on the leader, the accent
+        // on the next — the one asking for you.
+        let d = layout.dot
+        let dotRect = r(layout.barX + row.barWidth - (h - d) / 2 - d, row.y + (h - d) / 2, d, d)
+        switch row.kind {
+        case .leader:
+            ctx.setFillColor(rgb(0xFFFFFF))
+            ctx.fillEllipse(in: dotRect)
+        case .signal:
+            ctx.saveGState()
+            if glow { ctx.setShadow(offset: .zero, blur: 10 * k, color: rgb(0xFF4F1F, 0.65)) }
+            ctx.setFillColor(accent)
+            ctx.fillEllipse(in: dotRect)
+            ctx.restoreGState()
+        case .faded:
+            break
         }
     }
-
-    ctx.restoreGState()
 }
 
 // MARK: - Rendering
@@ -101,10 +171,9 @@ func render(size: Int, style: Style) -> CGImage {
     let s = CGFloat(size)
     let ctx = CGContext(
         data: nil, width: size, height: size, bitsPerComponent: 8, bytesPerRow: 0,
-        space: CGColorSpace(name: CGColorSpace.sRGB)!,
-        bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        space: sRGB, bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
     )!
-    // Work top-down, the way the numbers above are written.
+    // Work top-down, the way the design's numbers are written.
     ctx.translateBy(x: 0, y: s)
     ctx.scaleBy(x: 1, y: -1)
     ctx.interpolationQuality = .high
@@ -128,7 +197,7 @@ func render(size: Int, style: Style) -> CGImage {
         ctx.saveGState()
         ctx.setShadow(offset: CGSize(width: 0, height: s * 0.012), blur: s * 0.022,
                       color: rgb(0x000000, 0.32))
-        ctx.setFillColor(darkTeal)
+        ctx.setFillColor(midnightBottom)
         ctx.addPath(roundedPath(plate, radius))
         ctx.fillPath()
         ctx.restoreGState()
@@ -138,38 +207,24 @@ func render(size: Int, style: Style) -> CGImage {
     ctx.addPath(radius > 0 ? roundedPath(plate, radius) : CGPath(rect: plate, transform: nil))
     ctx.clip()
 
-    // Diagonal ground, lit from the top-left so the plate reads as a surface.
-    let gradient = CGGradient(
-        colorsSpace: CGColorSpace(name: CGColorSpace.sRGB)!,
-        colors: [deepTeal, darkTeal] as CFArray,
-        locations: [0, 1]
-    )!
-    ctx.drawLinearGradient(
-        gradient,
-        start: CGPoint(x: plate.minX, y: plate.minY),
-        end: CGPoint(x: plate.maxX, y: plate.maxY),
-        options: []
-    )
+    // Midnight, lifting towards the top so the plate reads as a surface.
+    ctx.drawLinearGradient(gradient([midnightTop, midnightBottom]),
+                           start: CGPoint(x: plate.midX, y: plate.minY),
+                           end: CGPoint(x: plate.midX, y: plate.maxY), options: [])
+    ctx.drawLinearGradient(gradient([rgb(0xFFFFFF, 0.08), rgb(0xFFFFFF, 0)]),
+                           start: CGPoint(x: plate.midX, y: plate.minY),
+                           end: CGPoint(x: plate.midX, y: plate.midY), options: [])
 
-    // A soft highlight in the top-left corner, well under the point of notice.
-    let sheen = CGGradient(
-        colorsSpace: CGColorSpace(name: CGColorSpace.sRGB)!,
-        colors: [rgb(0x8FE8DF, 0.20), rgb(0x8FE8DF, 0.0)] as CFArray,
-        locations: [0, 1]
-    )!
-    ctx.drawRadialGradient(
-        sheen,
-        startCenter: CGPoint(x: plate.minX + plate.width * 0.22, y: plate.minY + plate.height * 0.18),
-        startRadius: 0,
-        endCenter: CGPoint(x: plate.minX + plate.width * 0.22, y: plate.minY + plate.height * 0.18),
-        endRadius: plate.width * 0.72,
-        options: []
-    )
-
-    // The mark is inset within the plate so it never crowds the corners.
-    let markInset = plate.width * 0.06
-    drawMark(ctx, box: plate.insetBy(dx: markInset, dy: markInset))
+    drawTower(ctx, body: plate, layout: size <= 32 ? .small : .full, glow: size >= 64)
     ctx.restoreGState()
+
+    // A hairline edge, so the dark plate holds its shape on a dark Dock.
+    if style == .macOS && size >= 64 {
+        ctx.setStrokeColor(rgb(0xFFFFFF, 0.14))
+        ctx.setLineWidth(max(1, s / 512))
+        ctx.addPath(roundedPath(plate.insetBy(dx: 0.5, dy: 0.5), radius))
+        ctx.strokePath()
+    }
 
     return ctx.makeImage()!
 }
@@ -227,8 +282,8 @@ try writeJSON(
 
 // A preview at display size for the human deciding whether they like it.
 write(render(size: 1024, style: .macOS),
-      to: URL(fileURLWithPath: NSTemporaryDirectory()).appending(path: "claude-wm-icon-mac.png"))
+      to: URL(fileURLWithPath: NSTemporaryDirectory()).appending(path: "pitwall-icon-mac.png"))
 write(render(size: 1024, style: .iOS),
-      to: URL(fileURLWithPath: NSTemporaryDirectory()).appending(path: "claude-wm-icon-ios.png"))
+      to: URL(fileURLWithPath: NSTemporaryDirectory()).appending(path: "pitwall-icon-ios.png"))
 
 print("wrote \(macSizes.count) macOS sizes + 1 iOS")

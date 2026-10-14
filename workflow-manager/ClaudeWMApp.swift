@@ -2,7 +2,7 @@
 //  ClaudeWMApp.swift
 //  workflow-manager
 //
-//  The app entry point. The product is "Claude WM": PRODUCT_NAME sets the
+//  The app entry point. The product is "Pitwall": PRODUCT_NAME sets the
 //  bundle name, the executable and — via GENERATE_INFOPLIST_FILE — CFBundleName,
 //  which is what the bold app menu shows; CFBundleDisplayName in Info.plist
 //  covers Finder and the About box.

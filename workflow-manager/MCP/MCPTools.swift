@@ -77,7 +77,7 @@ final class MCPTools {
         MCPToolDefinition(
             name: "list_projects",
             title: "List projects",
-            description: "Every project on this Mac's Claude WM board, with its repository path and card counts. Call this first to find the project for your working directory.",
+            description: "Every project on this Mac's Pitwall board, with its repository path and card counts. Call this first to find the project for your working directory.",
             properties: [
                 "include_archived": ["type": "boolean", "description": "Include archived projects. Default false."],
             ],
@@ -154,7 +154,7 @@ final class MCPTools {
     /// Sent in `initialize`; clients show it to the model as the server's
     /// standing instructions.
     static let instructions = """
-    Claude WM is the user's kanban board. Use it to find assigned work and to report progress.
+    Pitwall is the user's kanban board. Use it to find assigned work and to report progress.
 
     1. Call list_projects and find the project whose repository contains your working directory.
     2. Call list_cards with requested_only=true for work the user assigned to you.

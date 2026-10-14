@@ -200,9 +200,9 @@ nonisolated enum BoardPairing {
         var errorDescription: String? {
             switch self {
             case .malformedPayload:
-                "That code isn’t a Claude WM pairing code."
+                "That code isn’t a Pitwall pairing code."
             case .needsNewerApp:
-                "That Mac is running a newer Claude WM. Update this app to pair with it."
+                "That Mac is running a newer Pitwall. Update this app to pair with it."
             }
         }
     }

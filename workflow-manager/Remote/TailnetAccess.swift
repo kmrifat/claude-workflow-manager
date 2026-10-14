@@ -2,7 +2,7 @@
 //  TailnetAccess.swift
 //  workflow-manager
 //
-//  "Use Claude WM away from home", over Tailscale (the owner's choice over a
+//  "Use Pitwall away from home", over Tailscale (the owner's choice over a
 //  relay: device to device, nothing of ours in between, and no backend to run).
 //
 //  Off by default, like every other listening socket in this app. When on and

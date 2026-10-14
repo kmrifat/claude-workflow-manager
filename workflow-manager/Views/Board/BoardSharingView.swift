@@ -105,7 +105,7 @@ struct BoardSharingView: View {
             Text("Control this board from your phone")
                 .font(.headline)
             Text("""
-                Claude WM can serve your boards to the Claude WM app on your \
+                Pitwall can serve your boards to the Pitwall app on your \
                 phone, over your local Wi-Fi only. Nothing is published to the \
                 internet and nothing is sent to a server.
 
@@ -260,7 +260,7 @@ struct BoardSharingView: View {
     @ViewBuilder
     private var pushSetup: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text("Notifications reach your phone only while Claude WM is open on it — iOS suspends the app seconds after the screen goes off. An Apple push key lets this Mac notify it while it sleeps. Only phones that aren’t currently connected get a push, so you never see the same move twice.")
+            Text("Notifications reach your phone only while Pitwall is open on it — iOS suspends the app seconds after the screen goes off. An Apple push key lets this Mac notify it while it sleeps. Only phones that aren’t currently connected get a push, so you never see the same move twice.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .fixedSize(horizontal: false, vertical: true)

@@ -220,7 +220,7 @@ final class BoardConnection {
 
     private func handle(_ frame: ServerFrame) {
         guard !frame.isFromNewerPeer else {
-            dropped(reason: "That Mac is running a newer Claude WM. Update this app.")
+            dropped(reason: "That Mac is running a newer Pitwall. Update this app.")
             return
         }
 

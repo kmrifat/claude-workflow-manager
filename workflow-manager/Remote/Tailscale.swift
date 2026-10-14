@@ -2,7 +2,7 @@
 //  Tailscale.swift
 //  workflow-manager
 //
-//  Whether this Mac is on a tailnet, and as what. Read-only: Claude WM never
+//  Whether this Mac is on a tailnet, and as what. Read-only: Pitwall never
 //  changes Tailscale's configuration — no `tailscale serve`, no ACLs, no
 //  certificates. It only listens on the address Tailscale already gave it,
 //  which is why turning remote access off undoes everything.

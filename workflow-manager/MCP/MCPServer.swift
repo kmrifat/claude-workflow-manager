@@ -2,7 +2,7 @@
 //  MCPServer.swift
 //  workflow-manager
 //
-//  Claude WM's MCP server: the boards, as tools, at
+//  Pitwall's MCP server: the boards, as tools, at
 //  http://127.0.0.1:7420/mcp over MCP's Streamable HTTP transport.
 //
 //  This is the replacement for agents editing `.taskboard/tasks.json`. A tool
@@ -76,7 +76,7 @@ final class MCPServer {
 
     static let host = "127.0.0.1"
     static let port: UInt16 = 7420
-    static let serverName = "claude-wm"
+    static let serverName = "pitwall"
     static let supportedProtocolVersions = ["2025-06-18", "2025-03-26", "2024-11-05"]
 
     private static let enabledKey = "mcpServerEnabled"
@@ -266,8 +266,8 @@ final class MCPServer {
         let presented = request.header("authorization")
             .flatMap { $0.hasPrefix("Bearer ") ? String($0.dropFirst(7)) : nil } ?? ""
         guard !token.isEmpty, MCPToken.matches(presented, token) else {
-            return Self.httpError(401, "Missing or wrong token. Copy the command from Claude WM › Settings.",
-                                  headers: [("WWW-Authenticate", "Bearer realm=\"claude-wm\"")])
+            return Self.httpError(401, "Missing or wrong token. Copy the command from Pitwall › Settings.",
+                                  headers: [("WWW-Authenticate", "Bearer realm=\"pitwall\"")])
         }
 
         switch request.method {
@@ -343,7 +343,7 @@ final class MCPServer {
                 "capabilities": ["tools": ["listChanged": false]],
                 "serverInfo": [
                     "name": Self.serverName,
-                    "title": "Claude WM",
+                    "title": "Pitwall",
                     "version": Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.0",
                 ],
                 "instructions": MCPTools.instructions,

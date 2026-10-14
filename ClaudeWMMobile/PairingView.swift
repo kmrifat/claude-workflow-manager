@@ -24,7 +24,7 @@ struct PairingView: View {
             Form {
                 Section {
                     Text("""
-                        On your Mac, open Claude WM and choose **Phone Access…**, \
+                        On your Mac, open Pitwall and choose **Phone Access…**, \
                         turn it on, and point your camera at the code it shows.
                         """)
                     .font(.callout)
@@ -62,7 +62,7 @@ struct PairingView: View {
                     }
                 }
             }
-            .navigationTitle("Claude WM")
+            .navigationTitle("Pitwall")
         }
     }
 

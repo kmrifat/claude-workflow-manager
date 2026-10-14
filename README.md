@@ -1,16 +1,16 @@
 <p align="center">
   <img src="Docs/banner.png" width="860"
-       alt="Claude WM — a macOS kanban board that mirrors your GitHub issues and hands work to Claude Code">
+       alt="Pitwall — every project you run on one macOS board, GitHub issues included, with Claude Code working the cards">
 </p>
 
 <p align="center">
-  <a href="https://github.com/kmrifat/claude-workflow-manager/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/kmrifat/claude-workflow-manager?style=flat-square&label=download&color=0F5F58"></a>
-  <img alt="macOS 26.5+" src="https://img.shields.io/badge/macOS-26.5%2B-0F5F58?style=flat-square">
-  <img alt="Apple Silicon" src="https://img.shields.io/badge/Apple%20Silicon-arm64-0F5F58?style=flat-square">
-  <img alt="Swift" src="https://img.shields.io/badge/Swift-SwiftUI%20%C2%B7%20SwiftData-0F5F58?style=flat-square">
+  <a href="https://github.com/kmrifat/claude-workflow-manager/releases/latest"><img alt="Latest release" src="https://img.shields.io/github/v/release/kmrifat/claude-workflow-manager?style=flat-square&label=download&color=FF4F1F"></a>
+  <img alt="macOS 26.5+" src="https://img.shields.io/badge/macOS-26.5%2B-FF4F1F?style=flat-square">
+  <img alt="Apple Silicon" src="https://img.shields.io/badge/Apple%20Silicon-arm64-FF4F1F?style=flat-square">
+  <img alt="Swift" src="https://img.shields.io/badge/Swift-SwiftUI%20%C2%B7%20SwiftData-FF4F1F?style=flat-square">
 </p>
 
-**Claude WM** is a kanban board for the projects you actually work on. Point a
+**Pitwall** (formerly Claude WM) is a kanban board for the projects you actually work on. Point a
 board at a Git clone and the window fills in around it: that repository's open
 GitHub issues, a real terminal, a file browser — and a card you can hand to
 Claude Code, then watch move itself to *In Progress* and on to *Review* with a
@@ -31,7 +31,12 @@ GitHub auth is whatever `gh` already holds, and the app never sees a token.
 ### Download the app
 
 No Xcode, no build. **[Download the latest release][latest]**, open
-`ClaudeWM-1.0-arm64.dmg`, and drag **Claude WM** into your Applications folder.
+the `.dmg`, and drag **Pitwall** into your Applications folder.
+
+> [!NOTE]
+> **Upgrading from Claude WM?** Pitwall is the same app under a new name, and
+> it opens your existing boards. Delete `Claude WM.app` afterwards — the two
+> share one store, so keeping both just means two copies writing to it.
 
 [latest]: https://github.com/kmrifat/claude-workflow-manager/releases/latest
 
@@ -39,11 +44,11 @@ No Xcode, no build. **[Download the latest release][latest]**, open
 > **The first launch will be refused, and that is expected.** These builds are
 > ad-hoc signed rather than notarized, so macOS blocks them until you say
 > otherwise. Open **System Settings ▸ Privacy & Security**, scroll to the
-> bottom, and click **Open Anyway** next to the message about Claude WM. Then
+> bottom, and click **Open Anyway** next to the message about Pitwall. Then
 > open the app again. One command does the same thing:
 >
 > ```bash
-> xattr -dr com.apple.quarantine "/Applications/Claude WM.app"
+> xattr -dr com.apple.quarantine "/Applications/Pitwall.app"
 > ```
 
 ### What you need
@@ -95,12 +100,19 @@ picks the card up, sets it to *In Progress* when it starts, and moves it to
 This one is opt-in and off by default for a reason: switching it on means
 writing a file into your repository and letting an agent move your cards.
 
+Or skip the file entirely: **Settings ▸ Claude** turns on a local MCP server and
+copies the `claude mcp add` command for it, so any Claude Code session can list,
+claim and update your cards as tools.
+
 **6. Use it from your phone**, if you want to. **Phone Access…** starts a
-LAN-only server and shows a QR code; the iOS client pairs by scanning it. The
+server on your network and shows a QR code; the iOS client pairs by scanning it.
+With [Tailscale](https://tailscale.com) installed, **Settings ▸ Remote** makes
+the phone and the MCP server reachable away from home too — device to device,
+nothing of ours in between. The
 board, the terminal and the file browser are three separate switches, because
 showing somebody your board should not also hand them a shell.
 
-Stuck anywhere? The app carries its own guide — **Help ▸ Claude WM Help**, or
+Stuck anywhere? The app carries its own guide — **Help ▸ Pitwall Help**, or
 just **⌘?**.
 
 ---
@@ -112,7 +124,7 @@ mode. Neither depends on the other.
 
 | | Lives in | Is |
 |---|---|---|
-| **Claude WM** | `workflow-manager.xcodeproj`, `workflow-manager/` | The macOS app above: kanban board, GitHub issue mirror, real terminal, file browser, iOS client. |
+| **Pitwall** | `workflow-manager.xcodeproj`, `workflow-manager/` | The macOS app above: kanban board, GitHub issue mirror, real terminal, file browser, iOS client. |
 | **WorkflowHost** | `Package.swift`, `Packages/`, `Apps/` | A headless daemon that polls GitHub, serves a dashboard, and can dispatch Claude Code runs across repos. |
 
 Both reach GitHub, and deliberately do it differently: the app shells out to
@@ -126,7 +138,7 @@ wrong.
 
 ---
 
-## Claude WM in detail
+## Pitwall in detail
 
 ### Cards
 
@@ -185,7 +197,7 @@ xcodebuild -project workflow-manager.xcodeproj -scheme workflow-manager -destina
 ```
 
 Or open `workflow-manager.xcodeproj` and hit run. The product is
-`Claude WM.app`; the Xcode target and source folder are still named
+`Pitwall.app`; the Xcode target and source folder are still named
 `workflow-manager`, which is deliberate — see `CLAUDE.md`.
 
 **The app is not sandboxed**, and can't be. A sandboxed process cannot launch an

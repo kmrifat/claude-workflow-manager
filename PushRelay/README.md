@@ -1,4 +1,4 @@
-# Claude WM push relay
+# Pitwall push relay
 
 A Cloudflare Worker that holds the APNs key so the app doesn't have to.
 

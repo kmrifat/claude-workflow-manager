@@ -153,7 +153,7 @@ nonisolated final class HTTPListener: @unchecked Sendable {
     /// rather than quoting POSIX.
     private static func describe(_ error: NWError, port: UInt16) -> String {
         if case .posix(let code) = error, code == .EADDRINUSE {
-            return "Port \(port) is already in use. Is another copy of Claude WM running?"
+            return "Port \(port) is already in use. Is another copy of Pitwall running?"
         }
         return error.localizedDescription
     }

@@ -146,7 +146,7 @@ nonisolated enum ClaudeLauncher {
 
     /// A breadcrumb for the human, not state this app reads back.
     ///
-    /// The server deliberately outlives the app — quitting Claude WM
+    /// The server deliberately outlives the app — quitting Pitwall
     /// should not kill a session someone is talking to from their phone — but
     /// adopting a pid across launches would mean trusting a number that may
     /// have been recycled. So: written, never re-read.

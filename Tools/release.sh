@@ -1,13 +1,13 @@
 #!/bin/bash
 #
-#  release.sh — build Claude WM for distribution outside the Mac App Store.
+#  release.sh — build Pitwall for distribution outside the Mac App Store.
 #
 #  This is the channel VS Code, iTerm2, Ghostty, Zed and Docker all use, and it
 #  is not a workaround: Developer ID signing plus notarization is a first-class
 #  Apple distribution path. Same $99 account, no review queue, and — the reason
 #  it is the only option here — **no App Sandbox**.
 #
-#  Claude WM cannot be sandboxed. It spawns `gh`, `git`, `claude` and a login
+#  Pitwall cannot be sandboxed. It spawns `gh`, `git`, `claude` and a login
 #  shell in the user's own repositories, and a sandboxed child inherits the
 #  parent's container: the terminal would open on a shell that cannot write to
 #  your checkout, cannot see /opt/homebrew, and cannot run `claude` from an nvm
@@ -44,7 +44,7 @@ set -euo pipefail
 cd "$(dirname "$0")/.."
 
 SCHEME="workflow-manager"
-APP_NAME="Claude WM"
+APP_NAME="Pitwall"
 TEAM_ID="${TEAM_ID:-R3YZ9PF9N6}"
 NOTARY_PROFILE="${NOTARY_PROFILE:-ClaudeWM}"
 

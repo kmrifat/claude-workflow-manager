@@ -5,15 +5,30 @@
 | | Lives in | Is |
 |---|---|---|
 | **WorkflowHost** | `Package.swift`, `Packages/`, `Apps/` | A local daemon that orchestrates Claude Code runs across repos. SPM, Swift 6 language mode, unsandboxed. |
-| **Claude WM** | `workflow-manager.xcodeproj`, `workflow-manager/` | A macOS SwiftUI + SwiftData kanban app that also mirrors a linked repository's GitHub issues. Xcode project, Swift 5 mode, **not sandboxed**. |
+| **Pitwall** | `workflow-manager.xcodeproj`, `workflow-manager/` | A macOS SwiftUI + SwiftData kanban app that also mirrors a linked repository's GitHub issues. Xcode project, Swift 5 mode, **not sandboxed**. |
 
-The app ships as **Claude WM** (`PRODUCT_NAME`, `CFBundleDisplayName`), but its
-Xcode project, target, source folder and bundle identifier are all still
-`workflow-manager`. Renaming those buys nothing and costs something: the bundle
-identifier is where SwiftData puts the store, so changing it strands an existing
-board. Same for `WorkflowDirectory.claudeMemoryBeginMarker` — it is already in
-other people's `CLAUDE.md` files. Use "Claude WM" in anything the user reads;
-leave the identifiers alone.
+The app ships as **Pitwall** (`PRODUCT_NAME`, `CFBundleDisplayName`); it was
+called Claude WM until 2026-10-14. Its Xcode project, target, source folder and
+bundle identifier are all still `workflow-manager`, and the `ClaudeWM*` type,
+target and package names stay too. Renaming those buys nothing and costs
+something: the bundle identifier is where SwiftData puts the store, so changing
+it strands an existing board. Use "Pitwall" in anything the user reads; leave
+the identifiers alone.
+
+A few user-visible strings still say "Claude WM" on purpose, because something
+outside this repository matches on them:
+
+- **`BoardServer.defaultServiceName`** ("Claude WM on <host>"). A paired phone
+  finds its Mac by that exact Bonjour name, so renaming it unpairs every phone.
+- **The `WorkflowDirectory` texts** — the marker-delimited block in other
+  people's `CLAUDE.md` files and `.taskboard/README.md`. They are already
+  committed in users' repositories, and the begin marker is how the app finds
+  its own block again.
+- **The `ClaudeWM` notarytool profile** in `Tools/release.sh`, which is a name
+  in the operator's keychain.
+
+The MCP server registers as `pitwall` (`MCPServer.serverName`), so its tools
+appear as `mcp__pitwall__…`.
 
 They share no code, no build system and no Swift language mode. **Never add the
 SPM package as a dependency of the Xcode project, or the reverse.** A change to
@@ -23,7 +38,7 @@ picked up by it — don't add a synchronized group at the repo root, which would
 break that.
 
 There is a *third* package, `Wire/`, and it does not weaken that rule. It holds
-`ClaudeWMWire`, the types Claude WM and its iOS client both speak, and it lives
+`ClaudeWMWire`, the types Pitwall and its iOS client both speak, and it lives
 on the app's side of the wall: it is outside `Packages/`, it may never depend on
 `WorkflowCore`, and nothing under `Packages/` may depend on it. The only
 permitted consumers are the targets of `workflow-manager.xcodeproj`. Duplicating
@@ -306,7 +321,7 @@ the single publisher). Off by default, switched on in Settings.
 
 ## Remote access (Tailscale)
 
-`Remote/` makes Claude WM usable away from home over the user's own tailnet —
+`Remote/` makes Pitwall usable away from home over the user's own tailnet —
 chosen over a relay, which would be the shared backend this repo refuses, and
 over Cloudflare Tunnel, which needs a domain. Off by default; Settings › Remote.
 
@@ -467,7 +482,7 @@ of the **WorkflowHost daemon**, a different product on the other side of the
 wall. Putting it there would couple the two products together.
 
 **The Mac serves, over the LAN or the user's tailnet.** The phone talks to
-Claude WM directly: no account, no server of ours. CloudKit was the obvious
+Pitwall directly: no account, no server of ours. CloudKit was the obvious
 alternative and is unavailable — iCloud entitlements require the App Sandbox,
 which this app cannot have. Away from the Wi-Fi it goes over Tailscale — see
 *Remote access* below.

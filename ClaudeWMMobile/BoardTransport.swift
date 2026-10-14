@@ -110,8 +110,8 @@ enum BoardPairingCode {
 
         var errorDescription: String? {
             switch self {
-            case .notAPairingCode: "That isn’t a Claude WM pairing code."
-            case .needsNewerApp:   "That Mac is running a newer Claude WM. Update this app to pair with it."
+            case .notAPairingCode: "That isn’t a Pitwall pairing code."
+            case .needsNewerApp:   "That Mac is running a newer Pitwall. Update this app to pair with it."
             }
         }
     }

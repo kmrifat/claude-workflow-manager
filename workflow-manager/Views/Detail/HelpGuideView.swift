@@ -4,7 +4,7 @@
 //
 //  The in-app user guide. Static content, rendered with the same
 //  `IssueMarkdownView` a GitHub issue body uses, so there is one Markdown look
-//  across the app. Opened from Help ▸ Claude WM Help (⌘?).
+//  across the app. Opened from Help ▸ Pitwall Help (⌘?).
 //
 
 import SwiftUI
@@ -17,7 +17,7 @@ struct HelpGuideView: View {
             HStack(spacing: 8) {
                 Image(systemName: "questionmark.circle.fill")
                     .foregroundStyle(.tint)
-                Text("Claude WM Help")
+                Text("Pitwall Help")
                     .font(.system(size: 14, weight: .semibold))
                 Spacer()
                 Button("Done") { dismiss() }
@@ -44,7 +44,7 @@ struct HelpGuideView: View {
     /// The guide itself. Kept here as one string so it renders through the same
     /// Markdown pipeline as everything else.
     private static let guide = """
-    # Claude WM
+    # Pitwall
 
     A kanban board for your projects that can mirror a linked repository's
     GitHub issues and hand work to Claude Code — without leaving the window.

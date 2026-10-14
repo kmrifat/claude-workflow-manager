@@ -2,7 +2,7 @@
 //  ClaudeWMMobileApp.swift
 //  ClaudeWMMobile
 //
-//  Claude WM's phone client. Reaches the Mac over the local network only —
+//  Pitwall's phone client. Reaches the Mac over the local network only —
 //  there is no account, no server, and nothing leaves the Wi-Fi.
 //
 

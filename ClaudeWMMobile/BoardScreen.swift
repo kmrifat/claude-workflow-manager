@@ -24,7 +24,7 @@ struct BoardScreen: View {
     var body: some View {
         NavigationStack {
             content
-                .navigationTitle(connection.snapshot?.project.name ?? paired?.macName ?? "Claude WM")
+                .navigationTitle(connection.snapshot?.project.name ?? paired?.macName ?? "Pitwall")
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar { toolbar }
                 .safeAreaInset(edge: .top, spacing: 0) { statusBar }
@@ -145,7 +145,7 @@ struct BoardScreen: View {
                         // iOS suspends the app and drops the socket shortly
                         // after it leaves the screen, so this is a real limit
                         // rather than a caveat — better said than discovered.
-                        Text("Only while Claude WM is open or recently used.")
+                        Text("Only while Pitwall is open or recently used.")
                     }
                 }
                 Divider()
