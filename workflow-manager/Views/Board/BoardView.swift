@@ -3,7 +3,9 @@
 //  workflow-manager
 //
 //  Clicking a card shows it in a popover anchored to it (`CardPopover`);
-//  double-clicking, or "Open in Window", opens it in its own window.
+//  double-clicking, or "Open in Window", opens it in its own window — the same
+//  one used to edit it (`CardWindow`). See `BoardColumnView.click` for why the
+//  popover waits a moment.
 //
 //  The keyboard works the board the way a pointer does: ←→↑↓ move the
 //  selection — and the popover with it, if one is open — Space shows or hides

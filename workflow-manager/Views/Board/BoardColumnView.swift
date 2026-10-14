@@ -33,6 +33,8 @@ struct BoardColumnView: View {
     @State private var draftName = ""
     @FocusState private var nameFieldFocused: Bool
     @State private var showsAllDone = false
+    /// A single click's popover, held back until a double-click is ruled out.
+    @State private var pendingPopover: Task<Void, Never>?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -286,19 +288,7 @@ struct BoardColumnView: View {
                     .offset(y: dropsAfterHovered ? 5 : -5)
             }
         }
-        // A click selects the card and shows its popover; a second click
-        // hides the popover and keeps the selection. A double-click opens the
-        // window — simultaneous, so the single click is not held back waiting
-        // to see whether a second one follows.
-        .onTapGesture {
-            selectedItemID = item.uuid
-            popoverItemID = popoverItemID == item.uuid ? nil : item.uuid
-            focus.wrappedValue = .board
-        }
-        .simultaneousGesture(TapGesture(count: 2).onEnded {
-            popoverItemID = nil
-            onOpenItem(item)
-        })
+        .onTapGesture { click(item) }
         .popover(
             isPresented: Binding(
                 get: { popoverItemID == item.uuid },
@@ -368,6 +358,40 @@ struct BoardColumnView: View {
         Button("Delete", role: .destructive) {
             if selectedItemID == item.uuid { selectedItemID = nil }
             withAnimation(.snappy) { context.delete(item) }
+        }
+    }
+
+    // MARK: - Clicks
+
+    /// A click selects at once and shows the popover a moment later; a
+    /// double-click opens the card's window instead.
+    ///
+    /// The popover is held back on purpose. Shown at once, it is on screen by
+    /// the second click of a double-click, and a click outside a transient
+    /// popover goes to closing it — so the double-click only ever toggled the
+    /// popover and never reached the card. Selection is immediate, so the card
+    /// still answers the first click.
+    private func click(_ item: WorkItem) {
+        focus.wrappedValue = .board
+        pendingPopover?.cancel()
+        // SwiftUI reports a tap per click; AppKit knows which click of a
+        // sequence this one is.
+        if (NSApp.currentEvent?.clickCount ?? 1) >= 2 {
+            popoverItemID = nil
+            onOpenItem(item)
+            return
+        }
+        let wasShowing = popoverItemID == item.uuid
+        selectedItemID = item.uuid
+        if wasShowing {
+            popoverItemID = nil
+            return
+        }
+        let delay = min(NSEvent.doubleClickInterval, 0.3)
+        pendingPopover = Task {
+            try? await Task.sleep(for: .seconds(delay))
+            guard !Task.isCancelled else { return }
+            popoverItemID = item.uuid
         }
     }
 

@@ -236,6 +236,11 @@ in a body full of paths reads as random font switches.
   (⌘O). It presents no sheets: a sheet presented from inside a popover is
   torn down with it as focus moves, so issue linking and blockers live in the
   window.
+- **A single click's popover waits until a double-click is ruled out**
+  (≤0.3 s; selection is immediate). Shown at once, the popover is on screen by
+  the second click, and a click outside a transient popover goes to closing
+  it — so a double-click only ever toggled the popover. The double-click
+  itself is read from `NSApp.currentEvent.clickCount`, not a second gesture.
 - **`CardWindow`**, a `WindowGroup(for: UUID.self)` scene, so opening a card
   that is already open brings its window forward. It replaced *both* the
   inspector column and `WorkItemEditorSheet`: a sheet freezes the board behind
