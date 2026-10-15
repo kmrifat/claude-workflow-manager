@@ -13,6 +13,7 @@
 
 import SwiftUI
 import SwiftData
+import ClaudeWMWire
 
 struct WorkItemCardView: View {
     let item: WorkItem

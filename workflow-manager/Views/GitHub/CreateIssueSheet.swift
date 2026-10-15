@@ -12,6 +12,7 @@
 
 import SwiftUI
 import SwiftData
+import ClaudeWMWire
 
 struct CreateIssueSheet: View {
     let item: WorkItem

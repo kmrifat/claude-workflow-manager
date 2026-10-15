@@ -71,6 +71,86 @@ enum BoardSnapshotBuilder {
         projects.filter { !$0.isDeleted }.map(reference(to:))
     }
 
+    /// For `listProjects`: each project with where it sits in the sidebar and
+    /// how it is doing, so the phone's Home is drawn without fetching a board.
+    static func treeReferences(to projects: [Project]) -> [WireProjectRef] {
+        projects.filter { !$0.isDeleted }.map { project in
+            var reference = reference(to: project)
+            reference.path = project.folder?.path.map(\.displayName) ?? []
+            reference.isPinned = project.isPinned
+            reference.isArchived = project.status == .archived
+            reference.doneCount = project.completedCount
+            reference.totalCount = project.totalCount
+            reference.agentsWorking = project.allItems.count { $0.agentState == .working }
+            reference.symbol = project.symbolName
+            reference.accent = project.accent.rawValue
+            return reference
+        }
+    }
+
+    // MARK: - A card in full
+
+    static func detail(of item: WorkItem, in project: Project) -> WireCardDetail {
+        let referenced = AttachmentReferences.ids(in: item.details)
+        let attachments = referenced.compactMap { id in
+            item.attachments.first { $0.uuid == id && !$0.isDeleted }
+        }
+        return WireCardDetail(
+            projectID: project.uuid.uuidString,
+            card: card(from: item),
+            columnID: item.column?.uuid.uuidString ?? "",
+            subtasks: item.orderedSubtasks.map {
+                WireSubtask(id: $0.uuid.uuidString, title: $0.title, done: $0.isDone)
+            },
+            activity: item.events
+                .filter { !$0.isDeleted }
+                .sorted { $0.date > $1.date }
+                .prefix(50)
+                .map {
+                    WireActivity(id: $0.uuid.uuidString, date: wireDate($0.date), actor: $0.actor,
+                                 tool: $0.tool, summary: $0.summary, note: $0.note)
+                },
+            attachments: attachments.map {
+                WireAttachmentRef(id: $0.uuid.uuidString, name: $0.filename, contentType: $0.contentType,
+                                  width: $0.pixelWidth, height: $0.pixelHeight, byteCount: $0.data.count)
+            },
+            agentState: wireAgentState(for: item.agentState),
+            agentName: item.agentName,
+            claimedAt: wireDate(item.agentClaimedAt),
+            createdAt: wireDate(item.createdAt)
+        )
+    }
+
+    // MARK: - Overview
+
+    /// The three smart lists, by the same rules the Mac's sidebar counts them.
+    static func overview(of projects: [Project]) -> WireOverview {
+        func items(_ queue: CardQueue) -> [WireQueueItem] {
+            queue.items(in: projects.filter { !$0.isDeleted }).flatMap { group in
+                group.items.map { item in
+                    WireQueueItem(
+                        projectID: group.project.uuid.uuidString,
+                        projectName: group.project.name,
+                        cardID: item.uuid.uuidString,
+                        title: item.title,
+                        columnName: item.column?.name ?? "",
+                        detail: latestAgentWord(on: item),
+                        dueDate: wireDate(item.dueDate)
+                    )
+                }
+            }
+        }
+        return WireOverview(agents: items(.agents), review: items(.review), overdue: items(.overdue))
+    }
+
+    /// What Claude last said it did — the summary of its newest tool call.
+    static func latestAgentWord(on item: WorkItem) -> String? {
+        item.events
+            .filter { $0.tool != nil && !$0.isDeleted }
+            .max { $0.date < $1.date }?
+            .summary
+    }
+
     private static func column(from column: BoardColumn) -> WireColumn {
         WireColumn(
             id: column.uuid.uuidString,
@@ -110,7 +190,10 @@ enum BoardSnapshotBuilder {
             // `WorkItem` has no `updatedAt`; this is the same stand-in
             // `WorkflowSyncModel.snapshot(of:)` uses, so a card's timestamp
             // means one thing whether it reaches a phone or `tasks.json`.
-            updatedAt: wireDate(item.completedAt ?? item.createdAt)
+            updatedAt: wireDate(item.completedAt ?? item.createdAt),
+            imageCount: item.attachments.isEmpty ? 0 : AttachmentReferences.ids(in: item.details).count,
+            agentState: wireAgentState(for: item.agentState),
+            agentDetail: latestAgentWord(on: item)
         )
     }
 
@@ -159,7 +242,15 @@ enum BoardSnapshotBuilder {
                 for subtask in item.orderedSubtasks {
                     hasher.combine(subtask.uuid)
                     hasher.combine(subtask.isDone)
+                    hasher.combine(subtask.title)
                 }
+                // A phone showing this card in full must hear about a new note,
+                // a new image, or Claude claiming it — none of which changes a
+                // field above.
+                hasher.combine(item.events.count { !$0.isDeleted })
+                hasher.combine(item.attachments.count { !$0.isDeleted })
+                hasher.combine(item.agentClaimedAt)
+                hasher.combine(item.agentName)
                 for blocker in item.blockedBy where !blocker.isDeleted {
                     hasher.combine(blocker.uuid)
                 }
@@ -174,6 +265,16 @@ enum BoardSnapshotBuilder {
     // a contract with a shipped phone; the model's are ours to change. A switch
     // means adding a case to either one fails to compile here, which is exactly
     // where that decision should be made.
+
+    private static func wireAgentState(for state: AgentState) -> WireAgentState {
+        switch state {
+        case .none:     .none
+        case .queued:   .queued
+        case .working:  .working
+        case .inReview: .inReview
+        case .done:     .done
+        }
+    }
 
     private static func wireRole(for role: ColumnRole) -> WireColumnRole {
         switch role {

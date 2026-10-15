@@ -58,6 +58,22 @@ public enum ClientMessage: Sendable, Equatable {
     case listDirectory(projectID: String, path: String)
     case readFile(projectID: String, path: String)
 
+    // MARK: Cards in full, Home, and images
+    //
+    // Additive, like the terminal messages: an older Mac answers these as
+    // unrecognised, and the phone shows what it can without them.
+
+    /// One card with its subtasks, activity and images. Answered by
+    /// `cardDetail`.
+    case requestCard(projectID: String, cardID: String)
+    /// The three smart lists. Answered by `overview`.
+    case requestOverview
+    /// A piece of an image for a card; see `WireUploadChunk`.
+    case uploadChunk(WireUploadChunk)
+    /// An image by id, scaled to fit `maxEdge` pixels (nil for full size).
+    /// Answered by `attachmentChunk`s.
+    case requestAttachment(projectID: String, attachmentID: String, maxEdge: Int?)
+
     case unrecognized(type: String)
 
     public var type: String {
@@ -74,6 +90,10 @@ public enum ClientMessage: Sendable, Equatable {
         case .terminalAction:   "terminalAction"
         case .listDirectory:    "listDirectory"
         case .readFile:         "readFile"
+        case .requestCard:      "requestCard"
+        case .requestOverview:  "requestOverview"
+        case .uploadChunk:      "uploadChunk"
+        case .requestAttachment: "requestAttachment"
         case .unrecognized(let type): type
         }
     }
@@ -93,7 +113,10 @@ public enum ServerMessage: Sendable, Equatable {
     /// The board moved. Carries the new revision only — the phone decides
     /// whether it needs the board, which keeps an idle phone cheap.
     case event(projectID: String, revision: Int)
-    case ack(requestID: String, revision: Int)
+    /// `createdCardID` answers a `createCard`: the Mac mints card ids, and a
+    /// phone that wants to attach images to the card it just created needs to
+    /// know which one that was.
+    case ack(requestID: String, revision: Int, createdCardID: String? = nil)
     case failure(WireFailure)
 
     // MARK: Terminal and files
@@ -111,6 +134,17 @@ public enum ServerMessage: Sendable, Equatable {
     case directory(projectID: String, path: String, entries: [WireFileNode])
     case fileContent(projectID: String, path: String, content: WireFileContent)
 
+    // MARK: Cards in full, Home, and images
+
+    case cardDetail(WireCardDetail)
+    case overview(WireOverview)
+    /// How much of an upload has arrived — the phone's progress bar.
+    case uploadProgress(uploadID: String, receivedBytes: Int)
+    /// The image is stored on the card, and `reference` is what was added to
+    /// its notes.
+    case uploadComplete(uploadID: String, attachmentID: String, reference: String)
+    case attachmentChunk(WireAttachmentChunk)
+
     case unrecognized(type: String)
 
     public var type: String {
@@ -127,6 +161,11 @@ public enum ServerMessage: Sendable, Equatable {
         case .terminalState:    "terminalState"
         case .directory:        "directory"
         case .fileContent:      "fileContent"
+        case .cardDetail:       "cardDetail"
+        case .overview:         "overview"
+        case .uploadProgress:   "uploadProgress"
+        case .uploadComplete:   "uploadComplete"
+        case .attachmentChunk:  "attachmentChunk"
         case .unrecognized(let type): type
         }
     }
@@ -249,6 +288,8 @@ private enum MessageKeys: String, CodingKey {
     case sessionID, data, action, replay, terminal, terminals
     case path, entries, content
     case relayURL
+    case cardID, maxEdge, chunk, detail, overview, uploadID, receivedBytes, attachmentID, reference
+    case createdCardID
 }
 
 extension ClientMessage: Codable {
@@ -288,6 +329,17 @@ extension ClientMessage: Codable {
         case .readFile(let projectID, let path):
             try container.encode(projectID, forKey: .projectID)
             try container.encode(path, forKey: .path)
+        case .requestCard(let projectID, let cardID):
+            try container.encode(projectID, forKey: .projectID)
+            try container.encode(cardID, forKey: .cardID)
+        case .requestOverview:
+            break
+        case .uploadChunk(let chunk):
+            try container.encode(chunk, forKey: .chunk)
+        case .requestAttachment(let projectID, let attachmentID, let maxEdge):
+            try container.encode(projectID, forKey: .projectID)
+            try container.encode(attachmentID, forKey: .attachmentID)
+            try container.encodeIfPresent(maxEdge, forKey: .maxEdge)
         }
     }
 
@@ -361,6 +413,29 @@ extension ClientMessage: Codable {
             else { break }
             self = .readFile(projectID: projectID, path: path)
             return
+        case "requestCard":
+            guard let projectID = try? container.decode(String.self, forKey: .projectID),
+                  let cardID = try? container.decode(String.self, forKey: .cardID)
+            else { break }
+            self = .requestCard(projectID: projectID, cardID: cardID)
+            return
+        case "requestOverview":
+            self = .requestOverview
+            return
+        case "uploadChunk":
+            guard let chunk = try? container.decode(WireUploadChunk.self, forKey: .chunk) else { break }
+            self = .uploadChunk(chunk)
+            return
+        case "requestAttachment":
+            guard let projectID = try? container.decode(String.self, forKey: .projectID),
+                  let attachmentID = try? container.decode(String.self, forKey: .attachmentID)
+            else { break }
+            self = .requestAttachment(
+                projectID: projectID,
+                attachmentID: attachmentID,
+                maxEdge: try? container.decodeIfPresent(Int.self, forKey: .maxEdge)
+            )
+            return
         default:
             break
         }
@@ -383,9 +458,10 @@ extension ServerMessage: Codable {
         case .event(let projectID, let revision):
             try container.encode(projectID, forKey: .projectID)
             try container.encode(revision, forKey: .revision)
-        case .ack(let requestID, let revision):
+        case .ack(let requestID, let revision, let createdCardID):
             try container.encode(requestID, forKey: .requestID)
             try container.encode(revision, forKey: .revision)
+            try container.encodeIfPresent(createdCardID, forKey: .createdCardID)
         case .failure(let failure):
             try container.encode(failure, forKey: .failure)
         case .terminals(let projectID, let terminals):
@@ -409,6 +485,19 @@ extension ServerMessage: Codable {
             try container.encode(projectID, forKey: .projectID)
             try container.encode(path, forKey: .path)
             try container.encode(content, forKey: .content)
+        case .cardDetail(let detail):
+            try container.encode(detail, forKey: .detail)
+        case .overview(let overview):
+            try container.encode(overview, forKey: .overview)
+        case .uploadProgress(let uploadID, let receivedBytes):
+            try container.encode(uploadID, forKey: .uploadID)
+            try container.encode(receivedBytes, forKey: .receivedBytes)
+        case .uploadComplete(let uploadID, let attachmentID, let reference):
+            try container.encode(uploadID, forKey: .uploadID)
+            try container.encode(attachmentID, forKey: .attachmentID)
+            try container.encode(reference, forKey: .reference)
+        case .attachmentChunk(let chunk):
+            try container.encode(chunk, forKey: .chunk)
         case .unrecognized:
             break
         }
@@ -442,7 +531,8 @@ extension ServerMessage: Codable {
             guard let requestID = try? container.decode(String.self, forKey: .requestID) else { break }
             self = .ack(
                 requestID: requestID,
-                revision: (try? container.decode(Int.self, forKey: .revision)) ?? 0
+                revision: (try? container.decode(Int.self, forKey: .revision)) ?? 0,
+                createdCardID: try? container.decodeIfPresent(String.self, forKey: .createdCardID)
             )
             return
         case "failure":
@@ -494,6 +584,31 @@ extension ServerMessage: Codable {
                   let content = try? container.decode(WireFileContent.self, forKey: .content)
             else { break }
             self = .fileContent(projectID: projectID, path: path, content: content)
+            return
+        case "cardDetail":
+            guard let detail = try? container.decode(WireCardDetail.self, forKey: .detail) else { break }
+            self = .cardDetail(detail)
+            return
+        case "overview":
+            self = .overview((try? container.decode(WireOverview.self, forKey: .overview)) ?? WireOverview())
+            return
+        case "uploadProgress":
+            guard let uploadID = try? container.decode(String.self, forKey: .uploadID) else { break }
+            self = .uploadProgress(
+                uploadID: uploadID,
+                receivedBytes: (try? container.decode(Int.self, forKey: .receivedBytes)) ?? 0
+            )
+            return
+        case "uploadComplete":
+            guard let uploadID = try? container.decode(String.self, forKey: .uploadID),
+                  let attachmentID = try? container.decode(String.self, forKey: .attachmentID),
+                  let reference = try? container.decode(String.self, forKey: .reference)
+            else { break }
+            self = .uploadComplete(uploadID: uploadID, attachmentID: attachmentID, reference: reference)
+            return
+        case "attachmentChunk":
+            guard let chunk = try? container.decode(WireAttachmentChunk.self, forKey: .chunk) else { break }
+            self = .attachmentChunk(chunk)
             return
         default:
             break

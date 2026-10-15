@@ -151,6 +151,13 @@ func everyMutationRoundTrips(_ mutation: BoardMutation) throws {
         .setPriority(cardID: "C", priority: .low),
         .setRequested(cardID: "C", requested: true),
         .deleteCard(cardID: "C"),
+        .setSubtask(cardID: "C", subtaskID: "S", done: true),
+        .addSubtask(cardID: "C", title: "t"),
+        .deleteSubtask(cardID: "C", subtaskID: "S"),
+        .addNote(cardID: "C", note: "n"),
+        .setDueDate(cardID: "C", dueDate: nil),
+        .setOwner(cardID: "C", owner: "o"),
+        .setTags(cardID: "C", tags: ["t"]),
     ].map(\.kind)
 
     #expect(!spellings.contains { $0.lowercased().contains("branch") })

@@ -11,6 +11,7 @@
 //
 
 import SwiftUI
+import ClaudeWMWire
 
 struct IssueMarkdownView: View {
     let markdown: String

@@ -27,10 +27,48 @@ public struct WireProjectRef: Codable, Sendable, Equatable {
     public var name: String
     public var repoSlug: String?
 
-    public init(id: String, name: String, repoSlug: String? = nil) {
+    // Where the project sits in the Mac's sidebar, and how it is doing — for
+    // the phone's Home. All optional: an older Mac sends none of them, and a
+    // board snapshot's copy of the project does not need them.
+
+    /// Workspace, then folders, outermost first. Empty for an unfiled project.
+    public var path: [String]?
+    public var isPinned: Bool?
+    public var isArchived: Bool?
+    public var doneCount: Int?
+    public var totalCount: Int?
+    /// Cards Claude is working on right now.
+    public var agentsWorking: Int?
+    /// SF Symbol name and accent colour name (`blue`, `purple`, …), as on the
+    /// Mac's badge. A name rather than a value, so each side uses its own
+    /// system colour and light and dark both follow.
+    public var symbol: String?
+    public var accent: String?
+
+    public init(
+        id: String,
+        name: String,
+        repoSlug: String? = nil,
+        path: [String]? = nil,
+        isPinned: Bool? = nil,
+        isArchived: Bool? = nil,
+        doneCount: Int? = nil,
+        totalCount: Int? = nil,
+        agentsWorking: Int? = nil,
+        symbol: String? = nil,
+        accent: String? = nil
+    ) {
         self.id = id
         self.name = name
         self.repoSlug = repoSlug
+        self.path = path
+        self.isPinned = isPinned
+        self.isArchived = isArchived
+        self.doneCount = doneCount
+        self.totalCount = totalCount
+        self.agentsWorking = agentsWorking
+        self.symbol = symbol
+        self.accent = accent
     }
 
     public init(from decoder: any Decoder) throws {
@@ -38,6 +76,14 @@ public struct WireProjectRef: Codable, Sendable, Equatable {
         id = try container.decode(String.self, forKey: .id)
         name = (try? container.decode(String.self, forKey: .name)) ?? ""
         repoSlug = try? container.decodeIfPresent(String.self, forKey: .repoSlug)
+        path = try? container.decodeIfPresent([String].self, forKey: .path)
+        isPinned = try? container.decodeIfPresent(Bool.self, forKey: .isPinned)
+        isArchived = try? container.decodeIfPresent(Bool.self, forKey: .isArchived)
+        doneCount = try? container.decodeIfPresent(Int.self, forKey: .doneCount)
+        totalCount = try? container.decodeIfPresent(Int.self, forKey: .totalCount)
+        agentsWorking = try? container.decodeIfPresent(Int.self, forKey: .agentsWorking)
+        symbol = try? container.decodeIfPresent(String.self, forKey: .symbol)
+        accent = try? container.decodeIfPresent(String.self, forKey: .accent)
     }
 }
 
@@ -92,6 +138,13 @@ public struct WireCard: Codable, Sendable, Equatable, Identifiable {
     public var subtasksDone: Int
     public var updatedAt: Date
 
+    /// Images the notes show. 0 from an older Mac.
+    public var imageCount: Int
+    /// How far Claude has got; nil from an older Mac.
+    public var agentState: WireAgentState?
+    /// Claude's latest word on it — "Editing TokenRefresher.swift".
+    public var agentDetail: String?
+
     public init(
         id: String,
         title: String,
@@ -110,7 +163,10 @@ public struct WireCard: Codable, Sendable, Equatable, Identifiable {
         blockedBy: [String] = [],
         subtaskCount: Int = 0,
         subtasksDone: Int = 0,
-        updatedAt: Date
+        updatedAt: Date,
+        imageCount: Int = 0,
+        agentState: WireAgentState? = nil,
+        agentDetail: String? = nil
     ) {
         self.id = id
         self.title = title
@@ -130,6 +186,9 @@ public struct WireCard: Codable, Sendable, Equatable, Identifiable {
         self.subtaskCount = subtaskCount
         self.subtasksDone = subtasksDone
         self.updatedAt = updatedAt
+        self.imageCount = imageCount
+        self.agentState = agentState
+        self.agentDetail = agentDetail
     }
 
     /// Tolerant on the way in, for the same reason `WorkflowTasksFile.TaskRow`
@@ -155,6 +214,9 @@ public struct WireCard: Codable, Sendable, Equatable, Identifiable {
         subtaskCount = (try? container.decode(Int.self, forKey: .subtaskCount)) ?? 0
         subtasksDone = (try? container.decode(Int.self, forKey: .subtasksDone)) ?? 0
         updatedAt = (try? container.decode(Date.self, forKey: .updatedAt)) ?? .distantPast
+        imageCount = (try? container.decode(Int.self, forKey: .imageCount)) ?? 0
+        agentState = try? container.decodeIfPresent(WireAgentState.self, forKey: .agentState)
+        agentDetail = try? container.decodeIfPresent(String.self, forKey: .agentDetail)
     }
 
     /// Mirrors `WorkItem.isBlocked`, but only as far as the ids allow — whether

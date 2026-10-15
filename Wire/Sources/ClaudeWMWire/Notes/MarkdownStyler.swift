@@ -1,6 +1,6 @@
 //
 //  MarkdownStyler.swift
-//  workflow-manager
+//  ClaudeWMWire
 //
 //  What each run of a card's notes should look like while it is being typed.
 //  The card window styles Markdown in place, the way Notes styles its text:
@@ -18,7 +18,7 @@
 
 import Foundation
 
-enum MarkdownStyle: Equatable, Sendable {
+public enum MarkdownStyle: Equatable, Sendable {
     /// A whole heading line, `#` to `######`.
     case heading(Int)
     /// Syntax the reader does not need to see at full strength: `##`, `**`,
@@ -48,14 +48,19 @@ enum MarkdownStyle: Equatable, Sendable {
     case listItem(depth: Int, marker: Int)
 }
 
-struct MarkdownSpan: Equatable, Sendable {
-    let range: NSRange
-    let style: MarkdownStyle
+public struct MarkdownSpan: Equatable, Sendable {
+    public let range: NSRange
+    public let style: MarkdownStyle
+
+    public init(range: NSRange, style: MarkdownStyle) {
+        self.range = range
+        self.style = style
+    }
 }
 
-enum MarkdownStyler {
+public enum MarkdownStyler {
 
-    static func spans(in text: String) -> [MarkdownSpan] {
+    public static func spans(in text: String) -> [MarkdownSpan] {
         let string = text as NSString
         var spans: [MarkdownSpan] = []
         var inFence = false
@@ -220,12 +225,12 @@ enum MarkdownStyler {
     /// What Return should insert on `line` to carry a list on, or nil when the
     /// line is not a list item. An item with nothing after its marker answers
     /// `.end` — Return on an empty bullet ends the list, as in Notes.
-    enum Continuation: Equatable {
+    public enum Continuation: Equatable, Sendable {
         case insert(String)
         case end(markerLength: Int)
     }
 
-    static func continuation(of line: String) -> Continuation? {
+    public static func continuation(of line: String) -> Continuation? {
         let ns = line as NSString
         let whole = NSRange(location: 0, length: ns.length)
         let match: NSTextCheckingResult
@@ -253,7 +258,7 @@ enum MarkdownStyler {
     /// `line` with a checklist marker added, or taken off if it has one. A
     /// plain bullet becomes a checklist item rather than gaining a second
     /// marker.
-    static func togglingChecklist(_ line: String) -> String {
+    public static func togglingChecklist(_ line: String) -> String {
         let ns = line as NSString
         let whole = NSRange(location: 0, length: ns.length)
         if let m = checklist.firstMatch(in: line, range: whole) {
@@ -267,7 +272,7 @@ enum MarkdownStyler {
     }
 
     /// The same line with its checkbox flipped, or nil if it has none.
-    static func togglingCheckbox(_ line: String) -> String? {
+    public static func togglingCheckbox(_ line: String) -> String? {
         let ns = line as NSString
         guard let m = checklist.firstMatch(in: line, range: NSRange(location: 0, length: ns.length)) else { return nil }
         let box = m.range(at: 3)
@@ -276,7 +281,7 @@ enum MarkdownStyler {
     }
 
     /// `line` set to a heading of `level`, or to body text with `level` 0.
-    static func settingHeading(_ line: String, level: Int) -> String {
+    public static func settingHeading(_ line: String, level: Int) -> String {
         let ns = line as NSString
         var body = line
         if let m = heading.firstMatch(in: line, range: NSRange(location: 0, length: ns.length)) {
