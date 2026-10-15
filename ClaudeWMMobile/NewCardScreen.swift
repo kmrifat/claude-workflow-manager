@@ -71,16 +71,14 @@ struct NewCardScreen: View {
 
                 NotesEditor(text: $notes,
                             placeholder: "Notes. # for a heading, - for a list, [] for a checklist — or add a photo.",
-                            controller: controller)
+                            controller: controller, images: connection.notesImages(in: projectID))
             }
             .padding(.horizontal, 20)
             .padding(.top, 4)
             .safeAreaInset(edge: .bottom, spacing: 0) {
-                VStack(spacing: 0) {
-                    NotesImageStrip(text: notes, projectID: projectID, connection: connection)
-                    if case .sending = phase { progress }
+                if case .sending = phase {
+                    progress.background(.bar)
                 }
-                .background(.bar)
             }
             .disabled(phase != .editing)
             .toolbar { toolbar }

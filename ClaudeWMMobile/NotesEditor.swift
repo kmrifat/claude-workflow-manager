@@ -8,9 +8,11 @@
 //  size and fade the same markers — and the text stays Markdown, because Claude,
 //  `gh` and the Mac all read it.
 //
-//  What the Mac does that this does not: draw a picture *inside* the text under
-//  its reference line. Here an image line is shown dimmed, and the pictures are
-//  drawn beneath the editor (`NotesImageStrip`), with their upload progress.
+//  A picture is drawn the way the Mac draws it: under its reference line, in
+//  space that line's paragraph spacing reserves, by the layout manager
+//  (`NotesLayoutManager`). The reference stays in the text, small and faded,
+//  so deleting the line is how a picture is removed — on both. A photo still
+//  on its way to the Mac carries its progress across its foot.
 //
 //  UIKit rather than `TextEditor` because three things need the text view
 //  itself: restyling without moving the caret, Return carrying a list on, and
@@ -88,15 +90,34 @@ final class NotesEditorController {
     }
 }
 
+/// Where the editor gets its pictures. `revision` changes whenever any answer
+/// might — the closures read state SwiftUI cannot see through UIKit, so this is
+/// how the editor knows to lay out again.
+struct NotesImageSource {
+    enum Upload: Equatable {
+        case sending(Double)
+        case failed
+    }
+
+    var image: (String) -> UIImage?
+    var upload: (String) -> Upload?
+    var retry: (String) -> Void
+    var revision: Int
+
+    static let none = NotesImageSource(image: { _ in nil }, upload: { _ in nil }, retry: { _ in }, revision: 0)
+}
+
 struct NotesEditor: UIViewRepresentable {
     @Binding var text: String
     var placeholder: String
     let controller: NotesEditorController
+    var images: NotesImageSource = .none
 
     func makeCoordinator() -> Coordinator { Coordinator(self) }
 
     func makeUIView(context: Context) -> NotesTextView {
-        let view = NotesTextView()
+        let view = NotesTextView.make()
+        view.images = images
         view.delegate = context.coordinator
         view.backgroundColor = .clear
         view.font = NotesStyle.body
@@ -115,8 +136,10 @@ struct NotesEditor: UIViewRepresentable {
 
     func updateUIView(_ view: NotesTextView, context: Context) {
         context.coordinator.parent = self
-        if view.text != text {
-            view.text = text
+        let picturesChanged = view.images.revision != images.revision
+        view.images = images
+        if view.text != text || picturesChanged {
+            if view.text != text { view.text = text }
             view.restyle()
         }
     }
@@ -152,10 +175,32 @@ struct NotesEditor: UIViewRepresentable {
     }
 }
 
-/// The text view, with a placeholder and a paste that takes pictures.
+/// The text view, with a placeholder, a paste that takes pictures, and the
+/// pictures drawn in the text.
 final class NotesTextView: UITextView {
     let placeholder = UILabel()
     var onPasteImage: ((UIImage) -> Void)?
+    var images: NotesImageSource = .none {
+        didSet { notesLayout?.images = images }
+    }
+    private var laidOutWidth: CGFloat = 0
+    private var imageTap: UITapGestureRecognizer?
+
+    private var notesLayout: NotesLayoutManager? { layoutManager as? NotesLayoutManager }
+
+    /// TextKit 1, built by hand: a text view given a container that already
+    /// has a layout manager uses that one, and `NSLayoutManager` is where
+    /// drawing under a line fragment is possible at all — the Mac's reason
+    /// too.
+    static func make() -> NotesTextView {
+        let storage = NSTextStorage()
+        let layout = NotesLayoutManager()
+        storage.addLayoutManager(layout)
+        let container = NSTextContainer(size: CGSize(width: 0, height: CGFloat.greatestFiniteMagnitude))
+        container.widthTracksTextView = true
+        layout.addTextContainer(container)
+        return NotesTextView(frame: .zero, textContainer: container)
+    }
 
     override init(frame: CGRect, textContainer: NSTextContainer?) {
         super.init(frame: frame, textContainer: textContainer)
@@ -163,6 +208,9 @@ final class NotesTextView: UITextView {
         placeholder.textColor = .placeholderText
         placeholder.numberOfLines = 0
         addSubview(placeholder)
+        let tap = UITapGestureRecognizer(target: self, action: #selector(tappedImage(_:)))
+        addGestureRecognizer(tap)
+        imageTap = tap
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) is not used") }
@@ -172,6 +220,32 @@ final class NotesTextView: UITextView {
         let width = bounds.width - textContainerInset.left - textContainerInset.right
         let size = placeholder.sizeThatFits(CGSize(width: width, height: .greatestFiniteMagnitude))
         placeholder.frame = CGRect(x: textContainerInset.left, y: textContainerInset.top, width: width, height: size.height)
+        // A picture's height follows the column's width.
+        if abs(width - laidOutWidth) > 0.5 {
+            laidOutWidth = width
+            if text.contains("![") { restyle() }
+        }
+    }
+
+    // MARK: Tapping a picture
+
+    /// A photo that did not reach the Mac is sent again by tapping it. Other
+    /// taps are the text view's, so the caret still goes where you touch.
+    @objc private func tappedImage(_ gesture: UITapGestureRecognizer) {
+        guard let target = imageTarget(at: gesture.location(in: self)) else { return }
+        images.retry(target)
+    }
+
+    private func imageTarget(at point: CGPoint) -> String? {
+        let inContainer = CGPoint(x: point.x - textContainerInset.left, y: point.y - textContainerInset.top)
+        return notesLayout?.imageFrames.first { $0.rect.contains(inContainer) }?.target
+    }
+
+    /// Only on a photo that failed: anywhere else the tap is the text view's.
+    override func gestureRecognizerShouldBegin(_ gesture: UIGestureRecognizer) -> Bool {
+        guard gesture === imageTap else { return super.gestureRecognizerShouldBegin(gesture) }
+        guard let target = imageTarget(at: gesture.location(in: self)) else { return false }
+        return images.upload(target) == .failed
     }
 
     /// Replaces text as typing would — undoable, and through the delegate's
@@ -210,8 +284,14 @@ final class NotesTextView: UITextView {
         let selection = selectedRange
         storage.beginEditing()
         storage.setAttributes(NotesStyle.base, range: whole)
+        let width = max(0, bounds.width - textContainerInset.left - textContainerInset.right
+                           - textContainer.lineFragmentPadding * 2)
         for span in MarkdownStyler.spans(in: text) where NSMaxRange(span.range) <= storage.length {
             NotesStyle.apply(span, to: storage)
+            if case .image(let target) = span.style {
+                NotesStyle.applyImage(target, image: images.image(target), width: width,
+                                      range: span.range, to: storage)
+            }
         }
         storage.endEditing()
         selectedRange = selection
@@ -270,7 +350,7 @@ enum NotesStyle {
         case .image:
             storage.addAttributes([
                 .foregroundColor: UIColor.tertiaryLabel,
-                .font: UIFont.preferredFont(forTextStyle: .footnote),
+                .font: UIFont.systemFont(ofSize: 11),
             ], range: range)
         case .listItem(let depth, _):
             let paragraph = NSMutableParagraphStyle()
@@ -280,6 +360,30 @@ enum NotesStyle {
         }
     }
 
+    /// An image line: its reference, small and faded, with room below for the
+    /// picture, which `NotesLayoutManager` draws there — `MarkdownTheme
+    /// .applyImage` on the Mac, with the same sizing.
+    static func applyImage(_ target: String, image: UIImage?, width: CGFloat, range: NSRange, to storage: NSTextStorage) {
+        guard let image, image.size.width > 0, image.size.height > 0, width > 0 else { return }
+        let size = displaySize(of: image, width: width)
+        storage.addAttribute(.notesImage, value: target, range: range)
+        let style = NSMutableParagraphStyle()
+        style.paragraphSpacingBefore = 4
+        style.paragraphSpacing = size.height + 12
+        storage.addAttribute(.paragraphStyle, value: style, range: range)
+    }
+
+    /// At most its own size in points — a Retina screenshot is half its pixel
+    /// width — never wider than the column, never taller than 420.
+    static func displaySize(of image: UIImage, width: CGFloat) -> CGSize {
+        let pixels = CGSize(width: image.size.width * image.scale, height: image.size.height * image.scale)
+        let natural = CGSize(width: pixels.width / 2, height: pixels.height / 2)
+        var size = natural
+        if size.width > width { size = CGSize(width: width, height: width * natural.height / natural.width) }
+        if size.height > 420 { size = CGSize(width: 420 * natural.width / natural.height, height: 420) }
+        return CGSize(width: floor(size.width), height: floor(size.height))
+    }
+
     private static func addTrait(_ trait: UIFontDescriptor.SymbolicTraits, to storage: NSTextStorage, in range: NSRange) {
         storage.enumerateAttribute(.font, in: range) { value, run, _ in
             let font = (value as? UIFont) ?? body
@@ -287,6 +391,73 @@ enum NotesStyle {
             if let descriptor = font.fontDescriptor.withSymbolicTraits(traits) {
                 storage.addAttribute(.font, value: UIFont(descriptor: descriptor, size: font.pointSize), range: run)
             }
+        }
+    }
+}
+
+extension NSAttributedString.Key {
+    static let notesImage = NSAttributedString.Key("pitwall.notesImage")
+}
+
+/// Draws each picture under its reference line, in the space that line's
+/// paragraph spacing reserved, with an upload's progress across its foot.
+final class NotesLayoutManager: NSLayoutManager {
+    var images: NotesImageSource = .none
+    /// Where each picture was last drawn, in container coordinates, so a tap
+    /// can find it.
+    private(set) var imageFrames: [(rect: CGRect, target: String)] = []
+
+    override func drawBackground(forGlyphRange glyphsToShow: NSRange, at origin: CGPoint) {
+        super.drawBackground(forGlyphRange: glyphsToShow, at: origin)
+        guard let storage = textStorage, let container = textContainers.first else { return }
+        let characters = characterRange(forGlyphRange: glyphsToShow, actualGlyphRange: nil)
+        let width = container.size.width - container.lineFragmentPadding * 2
+
+        storage.enumerateAttribute(.notesImage, in: characters) { value, run, _ in
+            guard let target = value as? String, let image = images.image(target) else { return }
+            let glyphs = glyphRange(forCharacterRange: run, actualCharacterRange: nil)
+            let line = lineFragmentUsedRect(forGlyphAt: max(NSMaxRange(glyphs) - 1, glyphs.location), effectiveRange: nil)
+            let size = NotesStyle.displaySize(of: image, width: width)
+            let frame = CGRect(x: container.lineFragmentPadding, y: line.maxY + 6, width: size.width, height: size.height)
+            imageFrames.removeAll { $0.target == target }
+            imageFrames.append((frame, target))
+
+            let onScreen = frame.offsetBy(dx: origin.x, dy: origin.y)
+            let shape = UIBezierPath(roundedRect: onScreen, cornerRadius: 8)
+            UIGraphicsGetCurrentContext()?.saveGState()
+            shape.addClip()
+            image.draw(in: onScreen)
+
+            switch images.upload(target) {
+            case .sending(let fraction):
+                // Faded until it has arrived, with a bar along the foot.
+                UIColor.systemBackground.withAlphaComponent(0.35).setFill()
+                shape.fill()
+                let track = CGRect(x: onScreen.minX + 10, y: onScreen.maxY - 14, width: onScreen.width - 20, height: 4)
+                UIColor.black.withAlphaComponent(0.35).setFill()
+                UIBezierPath(roundedRect: track, cornerRadius: 2).fill()
+                UIColor.white.setFill()
+                UIBezierPath(roundedRect: CGRect(x: track.minX, y: track.minY,
+                                                 width: track.width * min(1, max(0.02, fraction)), height: track.height),
+                             cornerRadius: 2).fill()
+            case .failed:
+                UIColor.black.withAlphaComponent(0.45).setFill()
+                shape.fill()
+                let label = "Not sent — tap to try again" as NSString
+                let attributes: [NSAttributedString.Key: Any] = [
+                    .font: UIFont.systemFont(ofSize: 13, weight: .semibold), .foregroundColor: UIColor.white,
+                ]
+                let textSize = label.size(withAttributes: attributes)
+                label.draw(at: CGPoint(x: onScreen.midX - textSize.width / 2, y: onScreen.midY - textSize.height / 2),
+                           withAttributes: attributes)
+            case nil:
+                break
+            }
+            UIGraphicsGetCurrentContext()?.restoreGState()
+            UIColor.label.withAlphaComponent(0.1).setStroke()
+            let edge = UIBezierPath(roundedRect: onScreen.insetBy(dx: 0.5, dy: 0.5), cornerRadius: 8)
+            edge.lineWidth = 1
+            edge.stroke()
         }
     }
 }

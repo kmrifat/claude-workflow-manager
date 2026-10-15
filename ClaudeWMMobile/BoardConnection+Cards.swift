@@ -25,7 +25,7 @@ import ClaudeWMWire
 
 /// One image on its way to the Mac.
 struct UploadState: Equatable {
-    enum Status: Equatable {
+    enum Status: Hashable {
         case sending
         case done(attachmentID: String)
         case failed(String)
@@ -271,6 +271,47 @@ extension BoardConnection {
         guard !matching.isEmpty else { return false }
         requestedImages.subtract(matching)
         return true
+    }
+
+    // MARK: - Pictures for the editor
+
+    /// What the notes editor draws for each image line on `projectID`'s card.
+    /// Read in a view's body, so the revision is observed and the editor lays
+    /// out again as pictures arrive and uploads move.
+    func notesImages(in projectID: String) -> NotesImageSource {
+        var hasher = Hasher()
+        hasher.combine(images.count)
+        hasher.combine(localImages.count)
+        for (id, upload) in uploads.sorted(by: { $0.key < $1.key }) {
+            hasher.combine(id)
+            hasher.combine(upload.received)
+            hasher.combine(upload.status)
+        }
+        return NotesImageSource(
+            image: { [weak self] target in
+                guard let self else { return nil }
+                if let id = Self.pendingID(target) { return self.localImages[id] }
+                guard target.hasPrefix("\(AttachmentReferences.scheme):") else { return nil }
+                return self.image(String(target.dropFirst(AttachmentReferences.scheme.count + 1)),
+                                  in: projectID, maxEdge: 1200)
+            },
+            upload: { [weak self] target in
+                guard let id = Self.pendingID(target), let upload = self?.uploads[id] else { return nil }
+                switch upload.status {
+                case .sending:  return .sending(upload.fraction)
+                case .failed:   return .failed
+                case .done:     return nil
+                }
+            },
+            retry: { [weak self] target in
+                if let id = Self.pendingID(target) { self?.retryUpload(id) }
+            },
+            revision: hasher.finalize()
+        )
+    }
+
+    private static func pendingID(_ target: String) -> String? {
+        target.hasPrefix("\(PendingImage.scheme):") ? String(target.dropFirst(PendingImage.scheme.count + 1)) : nil
     }
 
     // MARK: - The phone's guess
