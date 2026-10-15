@@ -356,8 +356,9 @@ struct CardScreen: View {
 
 // MARK: - Editing the notes
 
-/// The notes in the Markdown editor. Photos go to the Mac as soon as they are
-/// chosen; Done saves the text once they have all arrived.
+/// The notes in the Markdown editor, pictures drawn in place. Photos go to the
+/// Mac as soon as they are chosen; Done saves the text once they have all
+/// arrived.
 struct NotesEditScreen: View {
     let projectID: String
     let cardID: String
@@ -371,12 +372,8 @@ struct NotesEditScreen: View {
     var body: some View {
         NavigationStack {
             NotesEditor(text: $text, placeholder: "Notes. # for a heading, - for a list, [] for a checklist — or add a photo.",
-                        controller: controller)
+                        controller: controller, images: connection.notesImages(in: projectID))
                 .padding(.horizontal, 20)
-                .safeAreaInset(edge: .bottom, spacing: 0) {
-                    NotesImageStrip(text: text, projectID: projectID, connection: connection)
-                        .background(.bar)
-                }
                 .navigationTitle("Notes")
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar {

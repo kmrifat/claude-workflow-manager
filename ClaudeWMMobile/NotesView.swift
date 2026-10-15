@@ -170,6 +170,14 @@ struct NotesImage: View {
                   : connection.image(target, in: projectID, maxEdge: 1200)
     }
 
+    /// The widest it is drawn: its own size in points, as in the editor and on
+    /// the Mac — a small screenshot is not blown up to the column.
+    private var naturalWidth: CGFloat {
+        if let image { return image.size.width * image.scale / 2 }
+        if let ref, ref.width > 0 { return CGFloat(ref.width) / 2 }
+        return .infinity
+    }
+
     private var aspect: CGFloat {
         if let image, image.size.height > 0 { return image.size.width / image.size.height }
         if let ref, ref.height > 0 { return CGFloat(ref.width) / CGFloat(ref.height) }
@@ -196,6 +204,7 @@ struct NotesImage: View {
                     }
             }
         }
+        .frame(maxWidth: naturalWidth)
         .frame(maxWidth: .infinity, alignment: .leading)
         .accessibilityLabel(Text(alt))
         .fullScreenCover(isPresented: $showsFull) {
@@ -235,71 +244,5 @@ private struct FullImageView: View {
                 ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } }
             }
         }
-    }
-}
-
-/// Under the editor: each picture the notes name, with its upload progress —
-/// the editor shows only their lines.
-struct NotesImageStrip: View {
-    let text: String
-    let projectID: String
-    let connection: BoardConnection
-
-    var body: some View {
-        let images = NotesSegment.split(text).compactMap { segment -> (String, String)? in
-            if case .image(let alt, let target) = segment { return (alt, target) }
-            return nil
-        }
-        if !images.isEmpty {
-            ScrollView(.horizontal, showsIndicators: false) {
-                HStack(spacing: 10) {
-                    ForEach(images, id: \.1) { alt, target in
-                        tile(alt: alt, target: target)
-                    }
-                }
-                .padding(.horizontal, 16)
-                .padding(.vertical, 8)
-            }
-        }
-    }
-
-    private func tile(alt: String, target: String) -> some View {
-        let uploadID = target.hasPrefix("\(PendingImage.scheme):")
-            ? String(target.dropFirst(PendingImage.scheme.count + 1)) : nil
-        let image = uploadID.map { connection.localImages[$0] }
-            ?? connection.image(target, in: projectID, maxEdge: 300)
-        let upload = uploadID.flatMap { connection.uploads[$0] }
-
-        return ZStack(alignment: .bottom) {
-            Group {
-                if let image {
-                    Image(uiImage: image).resizable().scaledToFill()
-                } else {
-                    Color(.secondarySystemBackground).overlay(ProgressView())
-                }
-            }
-            .frame(width: 96, height: 72)
-            .clipShape(RoundedRectangle(cornerRadius: 8))
-
-            if let upload {
-                switch upload.status {
-                case .sending:
-                    ProgressView(value: upload.fraction)
-                        .tint(.white)
-                        .padding(6)
-                case .failed:
-                    Label("Failed", systemImage: "exclamationmark.triangle.fill")
-                        .font(.caption2.bold())
-                        .foregroundStyle(.white)
-                        .padding(4)
-                        .background(Capsule().fill(.red))
-                        .padding(4)
-                        .onTapGesture { connection.retryUpload(uploadID!) }
-                case .done:
-                    EmptyView()
-                }
-            }
-        }
-        .accessibilityLabel(Text(alt))
     }
 }

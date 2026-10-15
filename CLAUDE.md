@@ -669,9 +669,12 @@ workspace; a card opens as `CardScreen`, the phone's card window.
   from the sidebar's.
 - **The notes rules are shared, not copied.** `MarkdownBlock`, `MarkdownStyler`
   and `AttachmentReferences` live in `ClaudeWMWire` (`Notes/`), so `## ` is the
-  same size and a checklist continues the same way on both. What the phone does
-  not do is draw a picture inside the editor: an image line shows dimmed and the
-  pictures sit under it (`NotesImageStrip`). Reading, they are in place.
+  same size and a checklist continues the same way on both. Pictures are drawn
+  inside the editor as on the Mac — `NotesLayoutManager` (TextKit 1, built by
+  hand in `NotesTextView.make`) draws each under its reference line in space the
+  line's paragraph spacing reserves, at the Mac's size rule, with an upload's
+  progress across its foot. A photo that failed says so and is retried by
+  tapping it; every other tap is the text view's.
 - **Images go in pieces** (`WireImageTransfer`, 192 KB, 30 MB cap): one sealed
   frame per message through Cloudflare, and pieces give progress. The Mac checks
   order and total (`Assembler`), stores the image and *appends* its reference to
