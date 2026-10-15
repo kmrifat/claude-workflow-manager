@@ -774,12 +774,12 @@ struct ProjectSidebar: View {
         Button("Rename…") { beginFolderPrompt(.rename(folder)) }
         Menu("Move to") {
             Button(folder.isWorkspace ? "✓ Top Level" : "Top Level") {
-                withAnimation(.snappy) { SidebarMutations.move(folder, into: nil, context: context) }
+                withAnimation(.snappy) { _ = SidebarMutations.move(folder, into: nil, context: context) }
             }
             Divider()
             ForEach(folderChoices(excluding: folder), id: \.folder.uuid) { choice in
                 Button(choiceLabel(choice, current: folder.parent)) {
-                    withAnimation(.snappy) { SidebarMutations.move(folder, into: choice.folder, context: context) }
+                    withAnimation(.snappy) { _ = SidebarMutations.move(folder, into: choice.folder, context: context) }
                 }
             }
         }
