@@ -260,6 +260,35 @@ private final class RelayCollected: @unchecked Sendable {
     var text: String { lock.withLock { String(decoding: data, as: UTF8.self) } }
 }
 
+// MARK: - Serving the phone app (`loopback.sh serve`)
+
+if CommandLine.arguments.contains("serve") {
+    // Line-buffered, so the pairing code reaches a redirected log at once.
+    setvbuf(stdout, nil, _IOLBF, 0)
+    MainActor.assumeIsolated {
+        let container = AppModelContainer.make(inMemory: true)
+        let context = container.mainContext
+        SampleData.seed(into: context)
+        try? context.save()
+
+        let key = Data((0..<32).map { UInt8(truncatingIfNeeded: $0 &* 11 &+ 5) })
+        let name = "Pitwall Loopback"
+        let server = BoardServer()
+        let service = BoardService(context: context, expectedToken: { key })
+        service.didMutate = { project in
+            server.broadcast(.event(projectID: project.uuid.uuidString,
+                                    revision: BoardSnapshotBuilder.revision(of: project)))
+        }
+        server.handler = service
+        server.start(key: key, serviceName: name, port: 0)
+
+        let code = try? BoardPairing.url(for: BoardPairing.Payload(key: key, service: name, mac: "Loopback Mac"))
+        print("Serving the sample boards as “\(name)”. Pair the Simulator with:\n")
+        print("  xcrun simctl openurl booted '\(code?.absoluteString ?? "?")'\n")
+        withExtendedLifetime((container, server, service)) { RunLoop.main.run() }
+    }
+}
+
 // MARK: - A repository to look at
 
 let root = URL(fileURLWithPath: NSTemporaryDirectory())

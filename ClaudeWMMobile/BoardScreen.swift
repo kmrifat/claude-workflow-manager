@@ -2,11 +2,13 @@
 //  BoardScreen.swift
 //  ClaudeWMMobile
 //
-//  The board itself.
+//  The board itself (M02).
 //
-//  Columns are a horizontal pager rather than the Mac's side-by-side lanes: a
-//  phone is too narrow for two columns and far too narrow for five, and a
-//  pinched-down kanban is worse than one column you can swipe between.
+//  Columns are a pager with a row of chips above it rather than the Mac's
+//  side-by-side lanes: a phone is too narrow for two columns and far too
+//  narrow for five, and a pinched-down kanban is worse than one column you can
+//  swipe between. The chips say what the other columns hold without visiting
+//  them.
 //
 
 import SwiftUI
@@ -14,51 +16,37 @@ import ClaudeWMWire
 
 struct BoardScreen: View {
     let connection: BoardConnection
-    let browser: BoardBrowser
-    @Binding var paired: PairedMac?
+    let navigation: PhoneNavigation
+    let paired: PairedMac?
+    let reconnect: () -> Void
 
-    @AppStorage("cardMoveNotificationsEnabled") private var notifyOnMoves = true
-    @State private var columnIndex = 0
-    @State private var editingCard: WireCard?
+    @State private var columnID: String?
+    @State private var addingCard = false
 
     var body: some View {
         NavigationStack {
             content
-                .navigationTitle(connection.snapshot?.project.name ?? paired?.displayName ?? "Pitwall")
                 .navigationBarTitleDisplayMode(.inline)
                 .toolbar { toolbar }
-                .safeAreaInset(edge: .top, spacing: 0) { statusBar }
+                .safeAreaInset(edge: .top, spacing: 0) { ConnectionBanner(connection: connection, paired: paired) }
         }
-        .task(id: paired?.service) {
-            connection.onServerName = { name in
-                guard var updated = paired, updated.macName != name else { return }
-                updated.macName = name
-                PairedMacStore.save(updated)
-                paired = updated
+        .sheet(isPresented: $addingCard) {
+            if let snapshot = connection.snapshot {
+                NewCardScreen(projectID: snapshot.project.id, projectName: snapshot.project.name,
+                              columns: snapshot.columns, columnID: columnID, connection: connection)
             }
-            connection.onRelayAddress = { address in
-                // A quick tunnel's address changes when the Mac restarts; the
-                // Mac says the current one on every connect.
-                guard var updated = paired, updated.relayURL != address else { return }
-                updated.relayURL = address
-                PairedMacStore.save(updated)
-                paired = updated
-            }
-            connect()
         }
-        .onChange(of: PushRegistration.shared.token) { _, _ in
-            // Apple answers asynchronously, usually after the socket is already
-            // up, so the token is sent when it arrives rather than at connect.
-            connection.sendPushTokenIfAvailable()
+        .onChange(of: connection.snapshot?.project.id) { _, _ in
+            columnID = defaultColumn
         }
-        .onChange(of: browser.found.map(\.name)) { _, _ in
-            // The Mac appeared on the network — possibly for the first time,
-            // possibly after waking. Either way it is now reachable.
-            if !connection.state.isConnected { connect() }
-        }
-        .sheet(item: $editingCard) { card in
-            CardDetailSheet(card: card, connection: connection)
-        }
+        .onAppear { if columnID == nil { columnID = defaultColumn } }
+    }
+
+    /// The first column with work in progress, else the first: what you most
+    /// likely came to look at.
+    private var defaultColumn: String? {
+        guard let columns = connection.snapshot?.columns else { return nil }
+        return (columns.first { $0.role == .inProgress && !$0.cards.isEmpty } ?? columns.first)?.id
     }
 
     // MARK: - Pieces
@@ -66,46 +54,330 @@ struct BoardScreen: View {
     @ViewBuilder
     private var content: some View {
         if let snapshot = connection.snapshot, !snapshot.columns.isEmpty {
-            TabView(selection: $columnIndex) {
-                ForEach(Array(snapshot.columns.enumerated()), id: \.element.id) { index, column in
-                    ColumnView(
-                        column: column,
-                        snapshot: snapshot,
-                        connection: connection,
-                        onTap: { editingCard = $0 }
-                    )
-                    .tag(index)
+            VStack(spacing: 0) {
+                ColumnChips(columns: snapshot.columns, selection: $columnID)
+                TabView(selection: Binding(get: { columnID ?? snapshot.columns[0].id }, set: { columnID = $0 })) {
+                    ForEach(snapshot.columns, id: \.id) { column in
+                        ColumnList(column: column, snapshot: snapshot, connection: connection, navigation: navigation)
+                            .tag(column.id)
+                    }
                 }
+                .tabViewStyle(.page(indexDisplayMode: .never))
             }
-            .tabViewStyle(.page(indexDisplayMode: .always))
-            .indexViewStyle(.page(backgroundDisplayMode: .always))
+            .overlay(alignment: .bottomTrailing) {
+                Button { addingCard = true } label: {
+                    Image(systemName: "plus")
+                        .font(.title2.weight(.semibold))
+                        .foregroundStyle(.white)
+                        .frame(width: 56, height: 56)
+                        .background(Circle().fill(.tint))
+                        .shadow(color: .black.opacity(0.3), radius: 8, y: 4)
+                }
+                .padding(20)
+                .accessibilityLabel("New Card")
+            }
+        } else if connection.selectedProjectID == nil, connection.state.isConnected {
+            ContentUnavailableView("Choose a Board", systemImage: "square.stack.3d.up",
+                                   description: Text("Pick a project on Home, or from the menu above."))
         } else if connection.state.isConnected {
             ProgressView("Loading board…")
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
         } else {
-            unreachable
+            Unreachable(paired: paired, retry: reconnect)
         }
     }
 
-    private var unreachable: some View {
-        ContentUnavailableView {
-            Label("Can’t reach your Mac", systemImage: "wifi.exclamationmark")
-        } description: {
-            // Named causes, in the order they actually happen. "Check your
-            // connection" would be useless here: the usual answer is that the
-            // Mac is asleep.
-            Text("""
-                Make sure \(paired?.displayName ?? "your Mac") is awake and has Phone Access \
-                turned on — and, away from this Wi-Fi, that it has Access from Anywhere on.
-                """)
-        } actions: {
-            Button("Try Again") { connect() }
-                .buttonStyle(.borderedProminent)
+    @ToolbarContentBuilder
+    private var toolbar: some ToolbarContent {
+        ToolbarItem(placement: .principal) {
+            Menu {
+                ForEach(connection.projects.filter { $0.isArchived != true }, id: \.id) { project in
+                    Button {
+                        connection.select(projectID: project.id)
+                    } label: {
+                        if project.id == connection.selectedProjectID {
+                            Label(project.name, systemImage: "checkmark")
+                        } else {
+                            Text(project.name)
+                        }
+                    }
+                }
+            } label: {
+                VStack(spacing: 0) {
+                    HStack(spacing: 4) {
+                        Text(connection.snapshot?.project.name ?? "Board").font(.headline)
+                        Image(systemName: "chevron.down").font(.caption2.weight(.bold)).foregroundStyle(.secondary)
+                    }
+                    if let slug = connection.snapshot?.project.repoSlug {
+                        Text(slug).font(.caption2).foregroundStyle(.secondary)
+                    }
+                }
+                .foregroundStyle(.primary)
+            }
         }
+        ToolbarItem(placement: .topBarTrailing) {
+            Menu {
+                if let snapshot = connection.snapshot {
+                    Button {
+                        connection.requestSnapshot(projectID: snapshot.project.id, force: true)
+                    } label: {
+                        Label("Refresh", systemImage: "arrow.clockwise")
+                    }
+                }
+            } label: {
+                Image(systemName: "ellipsis")
+            }
+        }
+    }
+}
+
+// MARK: - Column chips
+
+private struct ColumnChips: View {
+    let columns: [WireColumn]
+    @Binding var selection: String?
+
+    var body: some View {
+        ScrollViewReader { proxy in
+            ScrollView(.horizontal, showsIndicators: false) {
+                HStack(spacing: 8) {
+                    ForEach(columns, id: \.id) { column in
+                        let selected = column.id == selection
+                        Button {
+                            withAnimation { selection = column.id }
+                        } label: {
+                            HStack(spacing: 5) {
+                                Circle().fill(Palette.column(column.role)).frame(width: 6, height: 6)
+                                Text(column.name).font(.subheadline.weight(selected ? .semibold : .regular))
+                                Text(countText(column))
+                                    .font(.footnote.monospacedDigit())
+                                    .foregroundStyle(column.isOverWIP ? .orange : .secondary)
+                            }
+                            .padding(.horizontal, 11)
+                            .padding(.vertical, 6)
+                            .background(Capsule().fill(selected ? Palette.column(column.role).opacity(0.18)
+                                                                : Color(.tertiarySystemFill)))
+                            .overlay(Capsule().strokeBorder(selected ? Palette.column(column.role).opacity(0.5) : .clear))
+                        }
+                        .buttonStyle(.plain)
+                        .id(column.id)
+                    }
+                }
+                .padding(.horizontal, 16)
+                .padding(.vertical, 8)
+            }
+            .onChange(of: selection) { _, id in
+                withAnimation { proxy.scrollTo(id, anchor: .center) }
+            }
+        }
+    }
+
+    private func countText(_ column: WireColumn) -> String {
+        if let limit = column.wipLimit { return "\(column.cards.count)/\(limit)" }
+        return "\(column.cards.count)"
+    }
+}
+
+extension WireColumn {
+    var isOverWIP: Bool {
+        guard let wipLimit else { return false }
+        return cards.count > wipLimit
+    }
+}
+
+// MARK: - Column
+
+private struct ColumnList: View {
+    let column: WireColumn
+    let snapshot: BoardSnapshot
+    let connection: BoardConnection
+    let navigation: PhoneNavigation
+
+    var body: some View {
+        List {
+            if column.cards.isEmpty {
+                Text("Nothing in \(column.name).")
+                    .foregroundStyle(.secondary)
+                    .frame(maxWidth: .infinity, minHeight: 120)
+                    .listRowBackground(Color.clear)
+                    .listRowSeparator(.hidden)
+            }
+            ForEach(column.cards) { card in
+                CardTile(card: card, blocked: card.isBlocked(in: snapshot.cardsByID))
+                    .contentShape(Rectangle())
+                    .onTapGesture { navigation.open(card.id, in: snapshot.project.id) }
+                    .listRowBackground(Color.clear)
+                    .listRowSeparator(.hidden)
+                    .listRowInsets(EdgeInsets(top: 5, leading: 16, bottom: 5, trailing: 16))
+                    .swipeActions(edge: .trailing) {
+                        Button(role: .destructive) {
+                            connection.mutate(.deleteCard(cardID: card.id))
+                        } label: { Label("Delete", systemImage: "trash") }
+                        Button {
+                            connection.mutate(.setRequested(cardID: card.id, requested: !card.requested))
+                        } label: {
+                            Label(card.requested ? "Take Back" : "Send to Claude", systemImage: "sparkles")
+                        }
+                        .tint(Palette.claude)
+                    }
+                    .swipeActions(edge: .leading) {
+                        ForEach(moveTargets, id: \.id) { target in
+                            Button {
+                                connection.mutate(.moveCard(cardID: card.id, toColumnID: target.id, index: 0))
+                            } label: {
+                                Label(target.name, systemImage: isBefore(target) ? "arrow.left" : "arrow.right")
+                            }
+                            .tint(Palette.column(target.role))
+                        }
+                    }
+                    .contextMenu {
+                        Menu("Move to") {
+                            ForEach(snapshot.columns.filter { $0.id != column.id }, id: \.id) { target in
+                                Button(target.name) {
+                                    connection.mutate(.moveCard(cardID: card.id, toColumnID: target.id, index: 0))
+                                }
+                            }
+                        }
+                        Button(card.requested ? "Take Back from Claude" : "Send to Claude") {
+                            connection.mutate(.setRequested(cardID: card.id, requested: !card.requested))
+                        }
+                        Button("Delete", role: .destructive) { connection.mutate(.deleteCard(cardID: card.id)) }
+                    }
+            }
+            Text("Swipe a card to move it, send it to Claude, or delete it.")
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+                .frame(maxWidth: .infinity)
+                .listRowBackground(Color.clear)
+                .listRowSeparator(.hidden)
+                .padding(.bottom, 70)
+        }
+        .listStyle(.plain)
+        .refreshable { connection.requestSnapshot(projectID: snapshot.project.id, force: true) }
+    }
+
+    /// Only adjacent columns, and never this one. A full column list on a
+    /// swipe is a row of five buttons where four are wrong; the long-press
+    /// menu has the rest.
+    private var moveTargets: [WireColumn] {
+        guard let index = snapshot.columns.firstIndex(where: { $0.id == column.id }) else { return [] }
+        return [index - 1, index + 1]
+            .filter { snapshot.columns.indices.contains($0) }
+            .map { snapshot.columns[$0] }
+    }
+
+    private func isBefore(_ target: WireColumn) -> Bool {
+        let ids = snapshot.columns.map(\.id)
+        return (ids.firstIndex(of: target.id) ?? 0) < (ids.firstIndex(of: column.id) ?? 0)
+    }
+}
+
+// MARK: - Card
+
+/// A card as the Mac's board draws it: issue and priority, title, Claude's
+/// callout while it works, and a footer of what is on it.
+struct CardTile: View {
+    let card: WireCard
+    let blocked: Bool
+
+    private var working: Bool { card.agentState?.isActive == true }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            if card.githubIssue != nil || card.priority >= .high {
+                HStack {
+                    if let issue = card.githubIssue {
+                        Text("#\(issue)").font(.caption.monospacedDigit()).foregroundStyle(.secondary)
+                    }
+                    Spacer()
+                    if card.priority >= .high {
+                        Text(card.priority.title)
+                            .font(.caption2.weight(.semibold))
+                            .padding(.horizontal, 6).padding(.vertical, 2)
+                            .foregroundStyle(Palette.priority(card.priority))
+                            .background(Capsule().fill(Palette.priority(card.priority).opacity(0.16)))
+                    }
+                }
+            }
+
+            Text(card.title.isEmpty ? "Untitled" : card.title)
+                .font(.body.weight(.semibold))
+                .foregroundStyle(card.isDone ? .secondary : .primary)
+                .strikethrough(card.isDone)
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+            if working, let state = card.agentState {
+                ClaudeCallout(state: state, detail: card.agentDetail)
+            }
+
+            footer
+        }
+        .padding(12)
+        .background(RoundedRectangle(cornerRadius: 12).fill(Color(.secondarySystemGroupedBackground)))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12)
+                .strokeBorder(working ? Palette.claude.opacity(0.6) : Color(.separator).opacity(0.5), lineWidth: 1)
+        )
     }
 
     @ViewBuilder
-    private var statusBar: some View {
+    private var footer: some View {
+        let hasFooter = card.dueDate != nil || card.subtaskCount > 0 || card.imageCount > 0 || card.branch != nil
+            || blocked || card.owner?.isEmpty == false || (card.requested && !working) || card.prURL != nil
+        if hasFooter {
+            HStack(spacing: 10) {
+                if blocked {
+                    Image(systemName: "hand.raised.fill").foregroundStyle(.orange)
+                }
+                if let due = card.dueDate {
+                    Label(due.shortDay, systemImage: "calendar")
+                        .foregroundStyle(due < Calendar.current.startOfDay(for: .now) && !card.isDone ? .red : .secondary)
+                }
+                if card.subtaskCount > 0 {
+                    Label("\(card.subtasksDone)/\(card.subtaskCount)", systemImage: "checklist")
+                }
+                if card.imageCount > 0 {
+                    Label("\(card.imageCount)", systemImage: "photo")
+                }
+                if let branch = card.branch {
+                    Text(branch).font(.caption.monospaced()).lineLimit(1)
+                }
+                if card.prURL != nil {
+                    Image(systemName: "arrow.triangle.pull")
+                }
+                if card.requested && !working {
+                    Image(systemName: "sparkles").foregroundStyle(Palette.claude)
+                }
+                Spacer(minLength: 0)
+                if let owner = card.owner, !owner.isEmpty {
+                    Initials(name: owner)
+                }
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
+            .labelStyle(TightLabel())
+        }
+    }
+}
+
+private struct TightLabel: LabelStyle {
+    func makeBody(configuration: Configuration) -> some View {
+        HStack(spacing: 3) {
+            configuration.icon.imageScale(.small)
+            configuration.title
+        }
+    }
+}
+
+// MARK: - Connection state
+
+/// What is wrong, if anything: a refusal from the Mac, a dropped connection,
+/// or an edit still on its way.
+struct ConnectionBanner: View {
+    let connection: BoardConnection
+    let paired: PairedMac?
+
+    var body: some View {
         if let failure = connection.lastFailure {
             HStack {
                 Image(systemName: "exclamationmark.circle.fill")
@@ -135,289 +407,26 @@ struct BoardScreen: View {
             .background(.thinMaterial)
         }
     }
-
-    @ToolbarContentBuilder
-    private var toolbar: some ToolbarContent {
-        ToolbarItem(placement: .topBarLeading) {
-            if connection.projects.count > 1 {
-                Menu {
-                    ForEach(connection.projects, id: \.id) { project in
-                        Button(project.name) { connection.select(projectID: project.id) }
-                    }
-                } label: {
-                    Image(systemName: "square.stack.3d.up")
-                }
-            }
-        }
-        ToolbarItem(placement: .topBarTrailing) {
-            Menu {
-                if let snapshot = connection.snapshot {
-                    Button("Refresh") { connection.requestSnapshot(projectID: snapshot.project.id) }
-                }
-                Divider()
-                Section {
-                    Toggle("Notify About Card Moves", isOn: $notifyOnMoves)
-                    if notifyOnMoves {
-                        // iOS suspends the app and drops the socket shortly
-                        // after it leaves the screen, so this is a real limit
-                        // rather than a caveat — better said than discovered.
-                        Text("Only while Pitwall is open or recently used.")
-                    }
-                }
-                Divider()
-                Button("Forget This Mac", role: .destructive) {
-                    connection.disconnect()
-                    PairedMacStore.forget()
-                    paired = nil
-                }
-            } label: {
-                Image(systemName: "ellipsis.circle")
-            }
-        }
-    }
-
-    /// Bonjour first: on the same Wi-Fi it is the direct route, and a name
-    /// rather than a remembered address — see `BoardBrowser`. Away from it the
-    /// Mac is invisible to Bonjour, so dial its tailnet name instead, if the
-    /// pairing code carried one. A tailnet connection that is up is kept even
-    /// once Bonjour sees the Mac again — dropping a working socket to switch
-    /// routes would cost more than the route saves; if the tailnet dial never
-    /// connected, `onChange(of: browser.found)` retries through Bonjour.
-    ///
-    /// Last, the Mac's Cloudflare Tunnel, if it offered one: nothing to install
-    /// on the phone, and sealed with the pairing key so Cloudflare only
-    /// forwards it.
-    private func connect() {
-        guard let paired else { return }
-        if let endpoint = browser.endpoint(named: paired.service) {
-            connection.connect(to: endpoint, key: paired.key)
-        } else if let host = paired.remoteHost, let port = paired.remotePort,
-                  let endpoint = BoardTransport.remoteEndpoint(host: host, port: port) {
-            connection.connect(to: endpoint, key: paired.key)
-        } else if let relay = paired.relayURL, let endpoint = BoardTransport.relayEndpoint(relay) {
-            connection.connect(to: endpoint, key: paired.key, sealed: true)
-        }
-    }
 }
 
-// MARK: - Column
-
-private struct ColumnView: View {
-    let column: WireColumn
-    let snapshot: BoardSnapshot
-    let connection: BoardConnection
-    let onTap: (WireCard) -> Void
-
-    @State private var newCardTitle = ""
+struct Unreachable: View {
+    let paired: PairedMac?
+    let retry: () -> Void
 
     var body: some View {
-        List {
-            Section {
-                if column.cards.isEmpty {
-                    Text("Nothing here.").foregroundStyle(.secondary)
-                }
-                ForEach(column.cards) { card in
-                    CardRow(card: card, blocked: card.isBlocked(in: snapshot.cardsByID))
-                        .contentShape(Rectangle())
-                        .onTapGesture { onTap(card) }
-                        .swipeActions(edge: .trailing) {
-                            Button("Delete", role: .destructive) {
-                                connection.mutate(.deleteCard(cardID: card.id))
-                            }
-                        }
-                        .swipeActions(edge: .leading) {
-                            ForEach(moveTargets, id: \.id) { target in
-                                Button(target.name) {
-                                    connection.mutate(.moveCard(
-                                        cardID: card.id, toColumnID: target.id, index: 0
-                                    ))
-                                }
-                            }
-                        }
-                }
-            } header: {
-                HStack {
-                    Text(column.name)
-                    Spacer()
-                    Text("\(column.cards.count)")
-                        .foregroundStyle(column.isOverWIP ? .orange : .secondary)
-                }
-            }
-
-            Section {
-                HStack {
-                    TextField("Add a card", text: $newCardTitle)
-                        .onSubmit(add)
-                    Button("Add", action: add)
-                        .disabled(newCardTitle.trimmingCharacters(in: .whitespaces).isEmpty)
-                }
-            }
+        ContentUnavailableView {
+            Label("Can’t reach your Mac", systemImage: "wifi.exclamationmark")
+        } description: {
+            // Named causes, in the order they actually happen. "Check your
+            // connection" would be useless here: the usual answer is that the
+            // Mac is asleep.
+            Text("""
+                Make sure \(paired?.displayName ?? "your Mac") is awake and has Phone Access \
+                turned on — and, away from this Wi-Fi, that it has Access from Anywhere on.
+                """)
+        } actions: {
+            Button("Try Again", action: retry)
+                .buttonStyle(.borderedProminent)
         }
-    }
-
-    /// Only adjacent columns, and never this one. A full column list on a phone
-    /// is a menu of five where four are wrong.
-    private var moveTargets: [WireColumn] {
-        guard let index = snapshot.columns.firstIndex(where: { $0.id == column.id }) else { return [] }
-        return [index - 1, index + 1]
-            .filter { snapshot.columns.indices.contains($0) }
-            .map { snapshot.columns[$0] }
-    }
-
-    private func add() {
-        let title = newCardTitle.trimmingCharacters(in: .whitespaces)
-        guard !title.isEmpty else { return }
-        connection.mutate(.createCard(columnID: column.id, title: title, details: ""))
-        newCardTitle = ""
-    }
-}
-
-private extension WireColumn {
-    var isOverWIP: Bool {
-        guard let wipLimit else { return false }
-        return cards.count > wipLimit
-    }
-}
-
-// MARK: - Card
-
-private struct CardRow: View {
-    let card: WireCard
-    let blocked: Bool
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
-            HStack(spacing: 6) {
-                if card.priority != .normal {
-                    Image(systemName: priorityIcon)
-                        .foregroundStyle(priorityColour)
-                        .font(.caption)
-                }
-                Text(card.title.isEmpty ? "Untitled" : card.title)
-                    .strikethrough(card.isDone)
-                    .foregroundStyle(card.isDone ? .secondary : .primary)
-            }
-            HStack(spacing: 8) {
-                if blocked {
-                    Label("Blocked", systemImage: "hand.raised.fill")
-                        .foregroundStyle(.orange)
-                }
-                if card.requested {
-                    Label("Sent to Claude", systemImage: "sparkles")
-                        .foregroundStyle(.purple)
-                }
-                if let issue = card.githubIssue {
-                    Label("#\(issue)", systemImage: "smallcircle.filled.circle")
-                }
-                if card.subtaskCount > 0 {
-                    Label("\(card.subtasksDone)/\(card.subtaskCount)", systemImage: "checklist")
-                }
-                if card.prURL != nil {
-                    Image(systemName: "arrow.triangle.pull")
-                }
-            }
-            .font(.caption2)
-            .foregroundStyle(.secondary)
-        }
-    }
-
-    private var priorityIcon: String {
-        switch card.priority {
-        case .urgent: "exclamationmark.2"
-        case .high:   "exclamationmark"
-        case .low:    "arrow.down"
-        case .normal: "minus"
-        }
-    }
-
-    private var priorityColour: Color {
-        switch card.priority {
-        case .urgent: .red
-        case .high:   .orange
-        case .low:    .secondary
-        case .normal: .secondary
-        }
-    }
-}
-
-// MARK: - Detail
-
-private struct CardDetailSheet: View {
-    let card: WireCard
-    let connection: BoardConnection
-    @Environment(\.dismiss) private var dismiss
-
-    @State private var title: String
-    @State private var details: String
-
-    init(card: WireCard, connection: BoardConnection) {
-        self.card = card
-        self.connection = connection
-        _title = State(initialValue: card.title)
-        _details = State(initialValue: card.details)
-    }
-
-    private var blocked: Bool {
-        guard let snapshot = connection.snapshot else { return false }
-        return card.isBlocked(in: snapshot.cardsByID)
-    }
-
-    var body: some View {
-        NavigationStack {
-            Form {
-                Section("Title") {
-                    TextField("Title", text: $title, axis: .vertical)
-                }
-                Section("Notes") {
-                    TextEditor(text: $details).frame(minHeight: 140)
-                }
-                Section("Priority") {
-                    Picker("Priority", selection: Binding(
-                        get: { card.priority },
-                        set: { connection.mutate(.setPriority(cardID: card.id, priority: $0)) }
-                    )) {
-                        ForEach(WirePriority.allCases, id: \.self) { priority in
-                            Text(priority.rawValue.capitalized).tag(priority)
-                        }
-                    }
-                    .pickerStyle(.segmented)
-                }
-                Section {
-                    // Disabled for the same reason the Mac disables it: do not
-                    // hand work to an agent that cannot start. The Mac refuses
-                    // it server-side too — this is the explanation, not the rule.
-                    Button(card.requested ? "Cancel Request" : "Send to Claude") {
-                        connection.mutate(.setRequested(cardID: card.id, requested: !card.requested))
-                        dismiss()
-                    }
-                    .disabled(blocked && !card.requested)
-                } footer: {
-                    if blocked {
-                        Text("This card is blocked by unfinished work.")
-                    }
-                }
-                if let prURL = card.prURL, let url = URL(string: prURL) {
-                    Section { Link("Open pull request", destination: url) }
-                }
-            }
-            .navigationTitle("Card")
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button("Cancel") { dismiss() }
-                }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Done") { save() }
-                }
-            }
-        }
-    }
-
-    private func save() {
-        // Only what actually changed. Sending both every time would produce two
-        // events and two board rewrites for a one-character edit.
-        if title != card.title { connection.mutate(.setTitle(cardID: card.id, title: title)) }
-        if details != card.details { connection.mutate(.setDetails(cardID: card.id, details: details)) }
-        dismiss()
     }
 }
