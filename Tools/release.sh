@@ -37,6 +37,20 @@
 #    Tools/release.sh                 build, sign, notarize, staple, package
 #    SKIP_NOTARIZE=1 Tools/release.sh sign and package only (no Apple round-trip)
 #    NOTARY_PROFILE=other Tools/release.sh    use a different keychain profile
+#    VERSION=1.2.0 BUILD_NUMBER=42 Tools/release.sh   stamp the version
+#
+#  SIGNING picks how the app is signed:
+#    automatic  (default) Xcode's automatic signing — needs the Apple account
+#               signed in to Xcode, so it is for a Mac, not for CI.
+#    manual     the "Developer ID Application" certificate in the keychain, by
+#               name — no account needed. What .github/workflows/release.yml
+#               uses, after importing the certificate into a temporary keychain.
+#    adhoc      no certificate at all, and no notarization. The app runs, but
+#               macOS refuses its first launch until the user allows it in
+#               Privacy & Security. For a project with no Developer ID yet.
+#
+#  NOTARY_KEYCHAIN names the keychain holding the notarytool profile, when it
+#  is not the login keychain (CI).
 #
 
 set -euo pipefail
@@ -47,6 +61,19 @@ SCHEME="workflow-manager"
 APP_NAME="Pitwall"
 TEAM_ID="${TEAM_ID:-R3YZ9PF9N6}"
 NOTARY_PROFILE="${NOTARY_PROFILE:-ClaudeWM}"
+SIGNING="${SIGNING:-automatic}"
+VERSION="${VERSION:-}"
+BUILD_NUMBER="${BUILD_NUMBER:-}"
+
+case "$SIGNING" in
+    automatic|manual) ;;
+    adhoc) SKIP_NOTARIZE=1 ;;
+    *) printf 'SIGNING must be automatic, manual or adhoc, not "%s".\n' "$SIGNING" >&2; exit 64 ;;
+esac
+
+# notarytool reads a profile from the login keychain unless told otherwise.
+NOTARY_AUTH=(--keychain-profile "$NOTARY_PROFILE")
+[ -n "${NOTARY_KEYCHAIN:-}" ] && NOTARY_AUTH+=(--keychain "$NOTARY_KEYCHAIN")
 
 # Everything lands beside the app's own DerivedData, on whichever disk the
 # repository lives on. `.build/` belongs to SPM and must stay untouched.
@@ -55,7 +82,7 @@ ARCHIVE="$OUT/$APP_NAME.xcarchive"
 EXPORTED="$OUT/export"
 APP="$EXPORTED/$APP_NAME.app"
 ZIP="$OUT/$APP_NAME.zip"
-DMG="$OUT/$APP_NAME.dmg"
+DMG="$OUT/$APP_NAME${VERSION:+-$VERSION}.dmg"
 
 say() { printf '\n\033[1m▸ %s\033[0m\n' "$1"; }
 die() { printf '\n\033[1;31m✗ %s\033[0m\n' "$1" >&2; exit 1; }
@@ -63,14 +90,14 @@ die() { printf '\n\033[1;31m✗ %s\033[0m\n' "$1" >&2; exit 1; }
 # --- Preflight -------------------------------------------------------------
 # Failing here costs seconds; failing after a ten-minute archive does not.
 
-if ! security find-identity -v -p codesigning | grep -q "Developer ID Application"; then
+if [ "$SIGNING" != adhoc ] && ! security find-identity -v -p codesigning | grep -q "Developer ID Application"; then
     die "No 'Developer ID Application' certificate in the keychain.
    Xcode ▸ Settings ▸ Accounts ▸ Manage Certificates ▸ + ▸ Developer ID Application.
    Then re-run this script."
 fi
 
 if [ -z "${SKIP_NOTARIZE:-}" ]; then
-    if ! xcrun notarytool history --keychain-profile "$NOTARY_PROFILE" >/dev/null 2>&1; then
+    if ! xcrun notarytool history "${NOTARY_AUTH[@]}" >/dev/null 2>&1; then
         die "No notarytool keychain profile named '$NOTARY_PROFILE'.
    Create one (it will prompt for an app-specific password):
      xcrun notarytool store-credentials \"$NOTARY_PROFILE\" \\
@@ -84,7 +111,25 @@ mkdir -p "$OUT"
 
 # --- Archive ---------------------------------------------------------------
 
-say "Archiving $APP_NAME"
+say "Archiving $APP_NAME${VERSION:+ $VERSION}"
+
+# How the archive is signed, by mode. Manual names the certificate instead of
+# asking Xcode to find one through a signed-in account, which CI does not have;
+# a Developer ID app with no restricted entitlements needs no profile.
+case "$SIGNING" in
+    automatic) SIGN_ARGS=(CODE_SIGN_STYLE=Automatic DEVELOPMENT_TEAM="$TEAM_ID"
+                          "CODE_SIGN_IDENTITY=Developer ID Application") ;;
+    manual)    SIGN_ARGS=(CODE_SIGN_STYLE=Manual DEVELOPMENT_TEAM="$TEAM_ID"
+                          "CODE_SIGN_IDENTITY=Developer ID Application"
+                          "OTHER_CODE_SIGN_FLAGS=--timestamp") ;;
+    adhoc)     SIGN_ARGS=(CODE_SIGN_STYLE=Manual DEVELOPMENT_TEAM=
+                          "CODE_SIGN_IDENTITY=-") ;;
+esac
+
+VERSION_ARGS=()
+[ -n "$VERSION" ] && VERSION_ARGS+=(MARKETING_VERSION="$VERSION")
+[ -n "$BUILD_NUMBER" ] && VERSION_ARGS+=(CURRENT_PROJECT_VERSION="$BUILD_NUMBER")
+
 xcodebuild archive \
     -project workflow-manager.xcodeproj \
     -scheme "$SCHEME" \
@@ -94,12 +139,18 @@ xcodebuild archive \
     -derivedDataPath "$PWD/.xcbuild" \
     ARCHS="arm64 x86_64" \
     ONLY_ACTIVE_ARCH=NO \
-    CODE_SIGN_STYLE=Automatic \
-    DEVELOPMENT_TEAM="$TEAM_ID" \
-    "CODE_SIGN_IDENTITY[sdk=macosx*]=Developer ID Application" \
-    | grep -E '^(\*\*|error:|warning: .*deprecat)' || true
+    "${SIGN_ARGS[@]}" \
+    ${VERSION_ARGS[@]+"${VERSION_ARGS[@]}"} \
+    > "$OUT/archive.log" 2>&1 || true
+grep -E '^\*\*' "$OUT/archive.log" || true
 
-[ -d "$ARCHIVE" ] || die "Archive failed."
+# A compiler error begins with the file's path, not with "error:", so a filter
+# anchored to the start of the line showed none of them — a failed archive
+# then said only "ARCHIVE FAILED". The whole log is kept beside the archive.
+if [ ! -d "$ARCHIVE" ]; then
+    grep -E 'error:' "$OUT/archive.log" | sort -u | head -40 >&2 || true
+    die "Archive failed. Full log: $OUT/archive.log"
+fi
 
 # --- Export ----------------------------------------------------------------
 #
@@ -108,29 +159,46 @@ xcodebuild archive \
 # use, for the sandbox reason at the top of this file.
 #
 # The archive above overrides CODE_SIGN_IDENTITY on the command line because the
-# project pins it to "Apple Development" for macOS. That is right for everyday
+# project pins it to "Apple Development" for macOS. By its plain name: xcodebuild
+# splits an argument at its first "=", so the SDK-conditional spelling
+# (`CODE_SIGN_IDENTITY[sdk=macosx*]=…`) arrives as a setting called
+# `CODE_SIGN_IDENTITY[sdk` — and a command-line setting overrides the
+# conditional ones anyway. That is right for everyday
 # builds and wrong here: an Apple Development certificate signs for machines
 # registered to the account and can never be notarized.
 
-cat > "$OUT/ExportOptions.plist" <<PLIST
+if [ "$SIGNING" = adhoc ]; then
+    # Nothing to re-sign for: the archive's ad-hoc signature is the signature.
+    say "Taking the app from the archive (ad-hoc, no export)"
+    mkdir -p "$EXPORTED"
+    ditto "$ARCHIVE/Products/Applications/$APP_NAME.app" "$APP"
+else
+    if [ "$SIGNING" = manual ]; then
+        EXPORT_SIGNING='<key>signingStyle</key><string>manual</string>
+    <key>signingCertificate</key><string>Developer ID Application</string>'
+    else
+        EXPORT_SIGNING='<key>signingStyle</key><string>automatic</string>'
+    fi
+    cat > "$OUT/ExportOptions.plist" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
     <key>method</key><string>developer-id</string>
     <key>teamID</key><string>$TEAM_ID</string>
-    <key>signingStyle</key><string>automatic</string>
+    $EXPORT_SIGNING
     <key>destination</key><string>export</string>
 </dict>
 </plist>
 PLIST
 
-say "Exporting with Developer ID"
-xcodebuild -exportArchive \
-    -archivePath "$ARCHIVE" \
-    -exportPath "$EXPORTED" \
-    -exportOptionsPlist "$OUT/ExportOptions.plist" \
-    | grep -E '^(\*\*|error:)' || true
+    say "Exporting with Developer ID"
+    xcodebuild -exportArchive \
+        -archivePath "$ARCHIVE" \
+        -exportPath "$EXPORTED" \
+        -exportOptionsPlist "$OUT/ExportOptions.plist" \
+        | grep -E '^(\*\*|error:)' || true
+fi
 
 [ -d "$APP" ] || die "Export failed — no app at $APP"
 
@@ -146,8 +214,10 @@ say "Verifying the signature"
 codesign --verify --deep --strict --verbose=2 "$APP"
 # The Hardened Runtime flag is what notarization checks for; catch a missing one
 # now rather than in Apple's rejection log.
-codesign -d --verbose=2 "$APP" 2>&1 | grep -q "flags=.*runtime" \
-    || die "The app is signed without the Hardened Runtime. Notarization will reject it."
+if [ "$SIGNING" != adhoc ]; then
+    codesign -d --verbose=2 "$APP" 2>&1 | grep -q "flags=.*runtime" \
+        || die "The app is signed without the Hardened Runtime. Notarization will reject it."
+fi
 
 # --- Notarize --------------------------------------------------------------
 #
@@ -158,7 +228,7 @@ codesign -d --verbose=2 "$APP" 2>&1 | grep -q "flags=.*runtime" \
 if [ -z "${SKIP_NOTARIZE:-}" ]; then
     say "Submitting the app to Apple"
     ditto -c -k --keepParent "$APP" "$ZIP"
-    xcrun notarytool submit "$ZIP" --keychain-profile "$NOTARY_PROFILE" --wait
+    xcrun notarytool submit "$ZIP" "${NOTARY_AUTH[@]}" --wait
 
     say "Stapling the ticket to the app"
     xcrun stapler staple "$APP"
@@ -183,7 +253,7 @@ rm -rf "$STAGE"
 
 if [ -z "${SKIP_NOTARIZE:-}" ]; then
     say "Notarizing the disk image"
-    xcrun notarytool submit "$DMG" --keychain-profile "$NOTARY_PROFILE" --wait
+    xcrun notarytool submit "$DMG" "${NOTARY_AUTH[@]}" --wait
     xcrun stapler staple "$DMG"
 
     say "Checking it the way Gatekeeper will"

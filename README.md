@@ -206,6 +206,42 @@ Or open `workflow-manager.xcodeproj` and hit run. The product is
 arbitrary binary, and the whole GitHub integration is built on spawning `gh`.
 That rules out the Mac App Store, which is a trade this repo makes knowingly.
 
+### Making a release
+
+Publish a release on GitHub — tag it `v1.2.0` — and the **Release** workflow
+builds the app at that tag and attaches `Pitwall-1.2.0.dmg` (plus its SHA-256)
+to it. The DMG holds the app beside an Applications shortcut, so installing is
+a drag. From the command line:
+
+```bash
+gh release create v1.2.0 --generate-notes
+```
+
+Without signing secrets the app is ad-hoc signed, and the workflow adds a
+first-launch note to the release. For a build that opens with no warning, add
+a Developer ID certificate and notarization credentials as repository secrets,
+once:
+
+```bash
+base64 -i DeveloperID.p12 | gh secret set DEVELOPER_ID_CERTIFICATE_P12
+```
+
+```bash
+gh secret set DEVELOPER_ID_CERTIFICATE_PASSWORD
+```
+
+```bash
+gh secret set NOTARY_APPLE_ID
+```
+
+```bash
+gh secret set NOTARY_APP_PASSWORD
+```
+
+`DeveloperID.p12` is your "Developer ID Application" certificate exported from
+Keychain Access with its private key; the app password is generated at
+appleid.apple.com. `Tools/release.sh` does the same build on a Mac.
+
 ---
 
 ## WorkflowHost (the daemon)
