@@ -29,6 +29,7 @@
 import Foundation
 import Network
 import Observation
+import UIKit
 import ClaudeWMWire
 
 @MainActor
@@ -77,6 +78,40 @@ final class BoardConnection {
     var onDirectory: ((String, [WireFileNode]) -> Void)?
     var onFileContent: ((String, WireFileContent) -> Void)?
 
+    // MARK: Cards in full, Home and images — see `BoardConnection+Cards`
+
+    /// Cards opened in full, by id.
+    var cardDetails: [String: WireCardDetail] = [:]
+    /// The card on screen in full, refreshed whenever its board moves.
+    var openCard: (projectID: String, cardID: String)?
+    var overview: WireOverview?
+    /// Decoded images by `ImageKey`.
+    var images: [String: UIImage] = [:]
+    /// Pieces of images on their way in.
+    @ObservationIgnored
+    var incomingImages: [String: Data] = [:]
+    /// Images asked for and not yet arrived, so a list of thumbnails redrawn
+    /// ten times asks once.
+    @ObservationIgnored
+    var requestedImages: Set<String> = []
+    /// Images on their way out, by upload id — which is also the `pending:` id
+    /// their placeholder line carries in the notes.
+    var uploads: [String: UploadState] = [:]
+    /// The pictures themselves, so a placeholder can show the photo at once.
+    var localImages: [String: UIImage] = [:]
+    /// Notes waiting for their images to finish uploading before they are
+    /// saved, by card id.
+    var heldDetails: [String: HeldDetails] = [:]
+    /// What to do once a `createCard` is answered with the new card's id.
+    @ObservationIgnored
+    var afterCreate: [String: (String) -> Void] = [:]
+    @ObservationIgnored
+    var overviewRefresh: Task<Void, Never>?
+
+    /// How this connection reached the Mac, for the Home chip.
+    enum Route: Equatable { case local, tailnet, tunnel }
+    private(set) var route: Route = .local
+
     private var connection: NWConnection?
     private var endpoint: NWEndpoint?
     private var key: Data?
@@ -107,11 +142,12 @@ final class BoardConnection {
     // MARK: - Connecting
 
     /// - Parameter sealed: dialling through a Cloudflare Tunnel.
-    func connect(to endpoint: NWEndpoint, key: Data, sealed: Bool = false) {
+    func connect(to endpoint: NWEndpoint, key: Data, sealed: Bool = false, route: Route = .local) {
         disconnect()
         self.endpoint = endpoint
         self.key = key
         self.isSealed = sealed
+        self.route = sealed ? .tunnel : route
         openConnection()
     }
 
@@ -297,7 +333,10 @@ final class BoardConnection {
             PhoneNotifier.shared.prepare()
             sendPushTokenIfAvailable()
             send(.listProjects)
+            send(.requestOverview)
             if let selectedProjectID { requestSnapshot(projectID: selectedProjectID) }
+            if let openCard { requestCard(projectID: openCard.projectID, cardID: openCard.cardID) }
+            resumeUploads()
 
         case .projects(let projects):
             self.projects = projects
@@ -305,6 +344,11 @@ final class BoardConnection {
             // is obviously right and saves a pointless tap.
             if selectedProjectID == nil, projects.count == 1 {
                 select(projectID: projects[0].id)
+            } else if selectedProjectID == nil,
+                      let last = UserDefaults.standard.string(forKey: Self.lastProjectKey),
+                      projects.contains(where: { $0.id == last }) {
+                // The board you were last on, as the Board tab left it.
+                select(projectID: last)
             }
 
         case .snapshot(let incoming):
@@ -319,6 +363,11 @@ final class BoardConnection {
             if let previous { announceMoves(from: previous, to: incoming, ignoring: mine) }
 
         case .event(let projectID, let revision):
+            // Any board moving can change Home's counts and smart lists.
+            refreshOverviewSoon()
+            if let openCard, openCard.projectID == projectID {
+                requestCard(projectID: projectID, cardID: openCard.cardID)
+            }
             guard projectID == selectedProjectID else { return }
             // Only ask for a board if ours is actually out of date. This is what
             // keeps an idle phone at one integer per change.
@@ -326,11 +375,24 @@ final class BoardConnection {
                 requestSnapshot(projectID: projectID)
             }
 
-        case .ack(let requestID, _):
+        case .ack(let requestID, _, let createdCardID):
             inFlight[requestID] = nil
             lastFailure = nil
+            if let createdCardID, let next = afterCreate.removeValue(forKey: requestID) {
+                next(createdCardID)
+            }
 
         case .failure(let failure):
+            if let requestID = failure.requestID, uploads[requestID] != nil {
+                uploads[requestID]?.status = .failed(failure.message)
+                lastFailure = failure.message
+                if let cardID = uploads[requestID]?.cardID { flushHeldDetails(for: cardID) }
+                return
+            }
+            if let requestID = failure.requestID {
+                afterCreate[requestID] = nil
+                if imageRequestFailed(requestID) { return }
+            }
             if let requestID = failure.requestID, inFlight[requestID] != nil {
                 inFlight[requestID] = nil
                 // The optimistic edit was wrong. Rather than inverting it, ask
@@ -345,6 +407,9 @@ final class BoardConnection {
                 // copy is right, which is exactly what a rejection disproves.
                 if let selectedProjectID {
                     requestSnapshot(projectID: selectedProjectID, force: true)
+                }
+                if let openCard {
+                    requestCard(projectID: openCard.projectID, cardID: openCard.cardID)
                 }
             }
             // A Mac with the feature switched off answers every terminal and
@@ -385,6 +450,21 @@ final class BoardConnection {
             repositoryAccessRefused = nil
             onFileContent?(path, content)
 
+        case .cardDetail(let detail):
+            cardDetails[detail.card.id] = detail
+
+        case .overview(let overview):
+            self.overview = overview
+
+        case .uploadProgress(let uploadID, let receivedBytes):
+            uploads[uploadID]?.received = receivedBytes
+
+        case .uploadComplete(let uploadID, let attachmentID, _):
+            uploadFinished(uploadID, attachmentID: attachmentID)
+
+        case .attachmentChunk(let chunk):
+            receive(chunk)
+
         case .unrecognized:
             break
         }
@@ -403,7 +483,11 @@ final class BoardConnection {
         send(.registerPush(deviceID: PushRegistration.shared.deviceID, token: token))
     }
 
+    static let lastProjectKey = "lastProjectID"
+
     func select(projectID: String) {
+        UserDefaults.standard.set(projectID, forKey: Self.lastProjectKey)
+        guard projectID != selectedProjectID || snapshot == nil else { return }
         selectedProjectID = projectID
         snapshot = nil
         // Another board's terminals are not this board's. Left in place they
@@ -457,7 +541,7 @@ final class BoardConnection {
         send(.readFile(projectID: selectedProjectID, path: path))
     }
 
-    private func send(_ message: ClientMessage) {
+    func send(_ message: ClientMessage) {
         guard let data = try? WireCodec.encode(ClientFrame(message: message)) else { return }
         if isSealed {
             // Nothing goes out unsealed through a tunnel, and nothing before
@@ -487,13 +571,19 @@ final class BoardConnection {
     /// Optimistic on purpose: a Wi-Fi round trip is long enough that waiting for
     /// it makes a drag feel broken. The server's next snapshot is authoritative
     /// and will correct anything the phone got wrong.
-    func mutate(_ mutation: BoardMutation) {
-        guard let projectID = selectedProjectID else { return }
+    ///
+    /// `projectID` defaults to the board on screen; a card opened from Home's
+    /// smart lists may belong to another. Returns the request id.
+    @discardableResult
+    func mutate(_ mutation: BoardMutation, in projectID: String? = nil) -> String? {
+        guard let projectID = projectID ?? selectedProjectID else { return nil }
         let requestID = UUID().uuidString
         inFlight[requestID] = mutation
         if case .moveCard(let cardID, _, _) = mutation { ownMoves.insert(cardID) }
         applyLocally(mutation)
+        applyToDetail(mutation)
         send(.mutate(MutationRequest(id: requestID, projectID: projectID, mutation: mutation)))
+        return requestID
     }
 
     /// Announces moves the phone did not make itself.
@@ -511,6 +601,13 @@ final class BoardConnection {
         // make arrived from over there, whoever originally caused it.
         for notice in current.moves(since: previous, ignoring: mine, origin: .mac) {
             PhoneNotifier.shared.post(notice)
+        }
+        // A card Claude was given reaching review or done is worth knowing
+        // about even with every other move switched off.
+        if !PhoneNotifier.shared.isEnabled {
+            for notice in current.finishedByClaude(since: previous, ignoring: mine) {
+                PhoneNotifier.shared.postFinished(notice)
+            }
         }
     }
 
@@ -546,6 +643,16 @@ final class BoardConnection {
             else { return }
             let clamped = min(max(index, 0), snapshot.columns[target].cards.count)
             snapshot.columns[target].cards.insert(moved, at: clamped)
+        case .setDueDate(let cardID, let dueDate):
+            edit(cardID, in: &snapshot) { $0.dueDate = dueDate }
+        case .setOwner(let cardID, let owner):
+            edit(cardID, in: &snapshot) { $0.owner = owner.isEmpty ? nil : owner }
+        case .setTags(let cardID, let tags):
+            edit(cardID, in: &snapshot) { $0.tags = tags }
+        case .setSubtask(let cardID, _, let done):
+            edit(cardID, in: &snapshot) { $0.subtasksDone = max(0, min($0.subtaskCount, $0.subtasksDone + (done ? 1 : -1))) }
+        case .addSubtask, .deleteSubtask, .addNote:
+            break
         case .createCard, .unrecognized:
             // The Mac mints card ids, so there is nothing sensible to draw until
             // it answers. Guessing one would produce a card that vanishes and

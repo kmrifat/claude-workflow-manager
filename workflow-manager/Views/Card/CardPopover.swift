@@ -14,6 +14,7 @@
 
 import SwiftUI
 import SwiftData
+import ClaudeWMWire
 
 struct CardPopover: View {
     @Bindable var item: WorkItem

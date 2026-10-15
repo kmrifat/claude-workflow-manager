@@ -53,6 +53,14 @@
 	<key>ITSAppUsesNonExemptEncryption</key>
 	<false/>
 
+	<!--
+	  For a photo taken straight into a card's notes. Photos from the library
+	  need no permission: PhotosPicker runs out of process and hands back only
+	  what was chosen.
+	-->
+	<key>NSCameraUsageDescription</key>
+	<string>Pitwall uses the camera to add a photo to a card.</string>
+
 	<key>UILaunchScreen</key>
 	<dict/>
 

@@ -19,6 +19,7 @@ import Foundation
 import SwiftData
 import ImageIO
 import UniformTypeIdentifiers
+import ClaudeWMWire
 
 @Model
 final class CardAttachment {

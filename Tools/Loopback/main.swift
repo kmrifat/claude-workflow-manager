@@ -208,6 +208,23 @@ private final class RelayClientState: @unchecked Sendable {
     }
 }
 
+/// Whether nothing is listening on `port` on loopback. The tunnel section binds
+/// the real ports, which a running Pitwall with remote access on also holds.
+func portIsFree(_ port: UInt16) -> Bool {
+    let fd = socket(AF_INET, SOCK_STREAM, 0)
+    guard fd >= 0 else { return false }
+    defer { close(fd) }
+    var address = sockaddr_in()
+    address.sin_family = sa_family_t(AF_INET)
+    address.sin_port = port.bigEndian
+    address.sin_addr.s_addr = inet_addr("127.0.0.1")
+    return withUnsafePointer(to: &address) {
+        $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+            bind(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size)) == 0
+        }
+    }
+}
+
 /// One raw HTTP exchange through the gateway; the response as text.
 @MainActor
 func httpThroughGateway(_ request: String) -> String {
@@ -243,6 +260,35 @@ private final class RelayCollected: @unchecked Sendable {
     var text: String { lock.withLock { String(decoding: data, as: UTF8.self) } }
 }
 
+// MARK: - Serving the phone app (`loopback.sh serve`)
+
+if CommandLine.arguments.contains("serve") {
+    // Line-buffered, so the pairing code reaches a redirected log at once.
+    setvbuf(stdout, nil, _IOLBF, 0)
+    MainActor.assumeIsolated {
+        let container = AppModelContainer.make(inMemory: true)
+        let context = container.mainContext
+        SampleData.seed(into: context)
+        try? context.save()
+
+        let key = Data((0..<32).map { UInt8(truncatingIfNeeded: $0 &* 11 &+ 5) })
+        let name = "Pitwall Loopback"
+        let server = BoardServer()
+        let service = BoardService(context: context, expectedToken: { key })
+        service.didMutate = { project in
+            server.broadcast(.event(projectID: project.uuid.uuidString,
+                                    revision: BoardSnapshotBuilder.revision(of: project)))
+        }
+        server.handler = service
+        server.start(key: key, serviceName: name, port: 0)
+
+        let code = try? BoardPairing.url(for: BoardPairing.Payload(key: key, service: name, mac: "Loopback Mac"))
+        print("Serving the sample boards as “\(name)”. Pair the Simulator with:\n")
+        print("  xcrun simctl openurl booted '\(code?.absoluteString ?? "?")'\n")
+        withExtendedLifetime((container, server, service)) { RunLoop.main.run() }
+    }
+}
+
 // MARK: - A repository to look at
 
 let root = URL(fileURLWithPath: NSTemporaryDirectory())
@@ -264,7 +310,8 @@ try? FileManager.default.createSymbolicLink(
 
 // MARK: - The Mac
 
-let schema = Schema([Project.self, BoardColumn.self, WorkItem.self, TerminalCommand.self])
+let schema = Schema([Project.self, ProjectFolder.self, BoardColumn.self, WorkItem.self, Subtask.self,
+                     CardEvent.self, CardAttachment.self, TerminalCommand.self])
 let container = try ModelContainer(
     for: schema,
     configurations: ModelConfiguration(isStoredInMemoryOnly: true)
@@ -463,7 +510,179 @@ let outcome: Void = try MainActor.assumeIsolated {
     let stillRunning = terminals.session(UUID(uuidString: session.id)!)?.isRunning ?? false
     check("the shell outlives the phone", stillRunning)
 
-    print("\n7. Through a Cloudflare Tunnel")
+    print("\n7. A card in full, its edits, and images")
+
+    // The harness's project was made bare; a card needs a column to go in.
+    BoardMutations.makeDefaultColumns(for: project, in: context)
+    try? context.save()
+
+    let cards = TestClient()
+    cards.connect(port: port, key: key)
+    cards.send(.hello(token: key.base64EncodedString(), clientName: "Card phone"))
+    _ = cards.waitFor("welcome") { if case .welcome = $0 { true } else { false } }
+    cards.send(.requestSnapshot(projectID: projectID, haveRevision: nil))
+    let boardReply = cards.waitFor("snapshot") { if case .snapshot = $0 { true } else { false } }
+    guard case .snapshot(let board)? = boardReply, let firstColumn = board.columns.first else {
+        check("a board to work on", false)
+        return
+    }
+
+    // Each mutation is acked by id; this sends one and waits for its answer.
+    var counter = 0
+    @MainActor func mutate(_ mutation: BoardMutation) -> ServerMessage? {
+        counter += 1
+        let id = "card-\(counter)"
+        cards.send(.mutate(MutationRequest(id: id, projectID: projectID, mutation: mutation)))
+        return cards.waitFor("answer to \(id)") { message in
+            switch message {
+            case .ack(let requestID, _, _): requestID == id
+            case .failure(let failure): failure.requestID == id
+            default: false
+            }
+        }
+    }
+    @MainActor func detail(_ cardID: String) -> WireCardDetail? {
+        cards.received.removeAll()
+        cards.send(.requestCard(projectID: projectID, cardID: cardID))
+        if case .cardDetail(let detail)? = cards.waitFor("detail", { if case .cardDetail = $0 { true } else { false } }) {
+            return detail
+        }
+        return nil
+    }
+
+    var newCardID = ""
+    if case .ack(_, _, let created)? = mutate(.createCard(columnID: firstColumn.id, title: "From the phone", details: "Some notes")) {
+        newCardID = created ?? ""
+    }
+    check("createCard's ack names the new card", !newCardID.isEmpty)
+
+    _ = mutate(.addSubtask(cardID: newCardID, title: "Write the test"))
+    _ = mutate(.addSubtask(cardID: newCardID, title: "Ship it"))
+    let withSubtasks = detail(newCardID)
+    check("subtasks come back with ids, in order", withSubtasks?.subtasks.map(\.title) == ["Write the test", "Ship it"])
+    if let first = withSubtasks?.subtasks.first {
+        _ = mutate(.setSubtask(cardID: newCardID, subtaskID: first.id, done: true))
+        check("a subtask is ticked from the phone", detail(newCardID)?.subtasks.first?.done == true)
+        _ = mutate(.deleteSubtask(cardID: newCardID, subtaskID: first.id))
+        check("…and deleted", detail(newCardID)?.subtasks.map(\.title) == ["Ship it"])
+    }
+    if case .failure? = mutate(.addSubtask(cardID: newCardID, title: "   ")) {
+        check("an empty subtask is refused", true)
+    } else {
+        check("an empty subtask is refused", false)
+    }
+
+    _ = mutate(.addNote(cardID: newCardID, note: "Use the existing dialog"))
+    let noted = detail(newCardID)
+    check("a note for Claude lands in the activity, by You",
+          noted?.activity.first?.note == "Use the existing dialog" && noted?.activity.first?.actor == "You")
+
+    let due = Date(timeIntervalSince1970: 1_790_000_000)
+    _ = mutate(.setDueDate(cardID: newCardID, dueDate: due))
+    _ = mutate(.setOwner(cardID: newCardID, owner: " JD "))
+    _ = mutate(.setTags(cardID: newCardID, tags: ["ios", "iOS", " v1 ", ""]))
+    let fields = detail(newCardID)?.card
+    check("due date, owner and tags are set — tags trimmed and de-duplicated",
+          fields?.dueDate == due && fields?.owner == "JD" && fields?.tags == ["ios", "v1"])
+    _ = mutate(.setDueDate(cardID: newCardID, dueDate: nil))
+    check("a due date is cleared", detail(newCardID)?.card.dueDate == nil)
+
+    // An image, in more than one piece.
+    let side = 360
+    let bitmap = NSBitmapImageRep(bitmapDataPlanes: nil, pixelsWide: side, pixelsHigh: side, bitsPerSample: 8,
+                                  samplesPerPixel: 4, hasAlpha: true, isPlanar: false, colorSpaceName: .deviceRGB,
+                                  bytesPerRow: 0, bitsPerPixel: 0)!
+    // Noise, from a fixed seed: it does not compress, so the PNG is big enough
+    // to need several pieces, and the same every run.
+    var seed: UInt32 = 2_463_534_242
+    func next() -> CGFloat {
+        seed ^= seed << 13; seed ^= seed >> 17; seed ^= seed << 5
+        return CGFloat(seed % 256) / 255
+    }
+    for x in 0..<side { for y in 0..<side {
+        bitmap.setColor(NSColor(deviceRed: next(), green: next(), blue: next(), alpha: 1), atX: x, y: y)
+    } }
+    let png = bitmap.representation(using: .png, properties: [:])!
+    let pieces = WireImageTransfer.pieces(of: png)
+    check("the test image needs more than one piece", pieces.count > 1, "\(png.count) bytes")
+    cards.received.removeAll()
+    for piece in pieces {
+        cards.send(.uploadChunk(WireUploadChunk(uploadID: "UP1", projectID: projectID, cardID: newCardID,
+                                                filename: "Screenshot.png", totalBytes: png.count,
+                                                offset: piece.offset, data: piece.data, isLast: piece.isLast)))
+    }
+    let completed = cards.waitFor("upload") { if case .uploadComplete = $0 { true } else { false } }
+    let progress = cards.received.compactMap { message -> Int? in
+        if case .uploadProgress("UP1", let received) = message { return received } else { return nil }
+    }
+    check("the Mac reports progress for each piece", progress.count == pieces.count && progress.last == png.count)
+    var attachmentID = ""
+    if case .uploadComplete(_, let id, let reference)? = completed {
+        attachmentID = id
+        check("the reference names the stored attachment", reference.contains("attachment:\(id)"))
+    } else {
+        check("the upload completes", false)
+    }
+    let pictured = detail(newCardID)
+    check("the card's notes end with the image", pictured?.card.details.hasSuffix("(attachment:\(attachmentID))\n") == true)
+    check("the card lists the image, and counts it", pictured?.attachments.first?.id == attachmentID
+          && pictured?.attachments.first?.width == side && pictured?.card.imageCount == 1)
+
+    cards.received.removeAll()
+    cards.send(.requestAttachment(projectID: projectID, attachmentID: attachmentID, maxEdge: 64))
+    var thumbnail = Data()
+    let thumbnailDeadline = Date().addingTimeInterval(6)
+    var done = false
+    while Date() < thumbnailDeadline, !done {
+        for message in cards.received {
+            if case .attachmentChunk(let chunk) = message, chunk.maxEdge == 64, chunk.offset == thumbnail.count {
+                thumbnail.append(chunk.data)
+                if chunk.isLast { done = true }
+            }
+        }
+        cards.received.removeAll()
+        pump(0.1)
+    }
+    let thumbImage = NSImage(data: thumbnail)
+    check("a thumbnail comes back scaled to the size asked for",
+          done && (thumbImage?.representations.first.map { max($0.pixelsWide, $0.pixelsHigh) } ?? 0) <= 64)
+
+    cards.received.removeAll()
+    cards.send(.uploadChunk(WireUploadChunk(uploadID: "JUNK", projectID: projectID, cardID: newCardID,
+                                            filename: "notes.txt", totalBytes: 5, offset: 0,
+                                            data: Data("hello".utf8), isLast: true)))
+    let junk = cards.waitFor("junk") { if case .failure(let f) = $0 { f.requestID == "JUNK" } else { false } }
+    check("a file that isn't an image is refused, not stored", junk != nil && detail(newCardID)?.attachments.count == 1)
+
+    cards.received.removeAll()
+    cards.send(.uploadChunk(WireUploadChunk(uploadID: "SKIP", projectID: projectID, cardID: newCardID,
+                                            filename: "a.png", totalBytes: 10, offset: 4,
+                                            data: Data(count: 6), isLast: true)))
+    check("a piece out of order is refused",
+          cards.waitFor("skip") { if case .failure(let f) = $0 { f.requestID == "SKIP" } else { false } } != nil)
+
+    cards.received.removeAll()
+    cards.send(.listProjects)
+    if case .projects(let list)? = cards.waitFor("projects", { if case .projects = $0 { true } else { false } }),
+       let mine = list.first(where: { $0.id == projectID }) {
+        check("projects come with their place in the tree and their counts",
+              mine.path == [] && mine.totalCount ?? 0 >= 1 && mine.accent != nil)
+    } else {
+        check("projects come with their place in the tree and their counts", false)
+    }
+    cards.send(.requestOverview)
+    check("the overview answers", cards.waitFor("overview") { if case .overview = $0 { true } else { false } } != nil)
+    cards.drop()
+
+    print("\n8. Through a Cloudflare Tunnel")
+
+    let tunnelPorts = [MCPServer.port, BoardServer.relayPort, TunnelGateway.port]
+    let held = tunnelPorts.filter { !portIsFree($0) }
+    if !held.isEmpty {
+        // Said, not failed: it is this Mac's Pitwall with remote access on,
+        // and the checks below would be talking to it instead of to the harness.
+        print("  skip ports \(held.map(String.init).joined(separator: ", ")) are in use — quit Pitwall (or turn off Access from Anywhere) to run this section")
+    } else {
 
     // The pieces that do not need a socket.
     let relayCode = try? BoardPairing.url(for: BoardPairing.Payload(
@@ -563,7 +782,7 @@ let outcome: Void = try MainActor.assumeIsolated {
     // A real quick tunnel through Cloudflare, opt-in: it puts this Mac on a
     // public address for as long as it runs. `LOOPBACK_CLOUDFLARE=1`.
     if ProcessInfo.processInfo.environment["LOOPBACK_CLOUDFLARE"] == "1" {
-        print("\n8. Live, through Cloudflare")
+        print("\n9. Live, through Cloudflare")
         let tunnel = CloudflareTunnel.shared
         tunnel.mode = .quick
         tunnel.start()
@@ -608,6 +827,7 @@ let outcome: Void = try MainActor.assumeIsolated {
 
     TunnelGateway.shared.stop()
     server.stopRelay()
+    }
 
     terminals.session(UUID(uuidString: session.id)!)?.stop()
     server.stop()

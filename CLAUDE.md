@@ -655,6 +655,45 @@ someone's network is not something to do quietly.
 - `createCard` has no optimistic form. The Mac mints ids, and guessing one
   produces a card that vanishes and reappears with a different identity.
 
+### Cards in full on the phone
+
+Four tabs — Home, Board, Terminal, Files — drawn to `design/ClaudeWM.fig` ›
+*Mobile · iPhone* (M01–M06). Home is the Mac's smart lists and the projects by
+workspace; a card opens as `CardScreen`, the phone's card window.
+
+- **A snapshot carries a board; a card in full is asked for** (`requestCard` →
+  `WireCardDetail`: subtasks by id, activity, image refs, Claude's state). Packing
+  that into every snapshot would resend forty cards' events for one move. The open
+  card is re-asked on every `event` for its board. Home's lists come the same way
+  (`requestOverview`), built on the Mac by `CardQueue` so a count never differs
+  from the sidebar's.
+- **The notes rules are shared, not copied.** `MarkdownBlock`, `MarkdownStyler`
+  and `AttachmentReferences` live in `ClaudeWMWire` (`Notes/`), so `## ` is the
+  same size and a checklist continues the same way on both. What the phone does
+  not do is draw a picture inside the editor: an image line shows dimmed and the
+  pictures sit under it (`NotesImageStrip`). Reading, they are in place.
+- **Images go in pieces** (`WireImageTransfer`, 192 KB, 30 MB cap): one sealed
+  frame per message through Cloudflare, and pieces give progress. The Mac checks
+  order and total (`Assembler`), stores the image and *appends* its reference to
+  the notes. A phone places a photo as `![name](pending:<uploadID>)` where it was
+  inserted, and holds the save of those notes (`HeldDetails`) until every image
+  they name has arrived — then sends them with the real `attachment:` ids, which
+  replaces the appended copy. A photo that fails is dropped from the notes rather
+  than holding them forever. The Mac forgets half-sent images on disconnect, so
+  the phone restarts them on reconnect.
+- **A new card is three steps**: `createCard`, then — on the ack's
+  `createdCardID`, because the Mac mints ids — its fields and photos, then the
+  notes. The screen stays up until the photos are across.
+- The phone sends a JPEG or PNG, never HEIC: the Mac would keep a HEIC as a PNG
+  ten times the size.
+- **"When Claude finishes a card"** is `BoardSnapshot.finishedByClaude`: a
+  requested card arriving in a review or done column. It notifies only when
+  card-move notices are off, so nothing arrives twice.
+- `Tools/loopback.sh serve` runs the server on the sample boards, under a
+  throwaway key and its own Bonjour name, and prints a code for
+  `xcrun simctl openurl booted '<code>'`. That is how to look at the phone app
+  against a real server without going near the real board or pairing key.
+
 ### Terminal and Files on the phone
 
 Three tabs, not one screen: Board, Terminal, Files. The last two are **off until

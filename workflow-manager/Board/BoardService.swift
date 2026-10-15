@@ -30,7 +30,7 @@ import ClaudeWMWire
 
 @MainActor
 final class BoardService: BoardServerHandler {
-    private let context: ModelContext
+    let context: ModelContext
     private let expectedToken: () -> Data?
 
     /// Called after a mutation lands, so the owner can tell the file-sync layer
@@ -46,6 +46,10 @@ final class BoardService: BoardServerHandler {
     /// test can build a board-only service, and so the feature is absent rather
     /// than merely refusing if it is ever compiled out.
     private var repository: RepositoryService?
+
+    /// Images a phone is part-way through sending, by client and upload id.
+    /// See `BoardService+Cards`.
+    var uploads: [UploadKey: PendingUpload] = [:]
 
     init(context: ModelContext, expectedToken: @escaping () -> Data? = { BoardPairing.loadKey() }) {
         self.context = context
@@ -85,7 +89,7 @@ final class BoardService: BoardServerHandler {
             handleHello(token: token, name: name, client: client, server: server)
 
         case .listProjects:
-            server.send(.projects(BoardSnapshotBuilder.references(to: allProjects())), to: client)
+            server.send(.projects(BoardSnapshotBuilder.treeReferences(to: allProjects())), to: client)
 
         case .requestSnapshot(let projectID, let haveRevision):
             guard let project = project(id: projectID) else {
@@ -127,6 +131,18 @@ final class BoardService: BoardServerHandler {
                 message: "Terminal and file access isn’t available on this Mac."
             )), to: client)
 
+        case .requestCard(let projectID, let cardID):
+            sendCard(projectID: projectID, cardID: cardID, to: client, on: server)
+
+        case .requestOverview:
+            server.send(.overview(BoardSnapshotBuilder.overview(of: allProjects())), to: client)
+
+        case .uploadChunk(let chunk):
+            receive(chunk, from: client, on: server)
+
+        case .requestAttachment(let projectID, let attachmentID, let maxEdge):
+            sendAttachment(attachmentID, projectID: projectID, maxEdge: maxEdge, to: client, on: server)
+
         case .unrecognized(let type):
             server.send(.failure(WireFailure(
                 code: .unsupportedMutation,
@@ -160,6 +176,9 @@ final class BoardService: BoardServerHandler {
     /// would never be pushed to — which is precisely the case APNs is for.
     func clientDisconnected(_ client: UUID) {
         repository?.clientDisconnected(client)
+        // A half-sent image is dropped with its connection; the phone starts
+        // it again when it reconnects.
+        uploads = uploads.filter { $0.key.client != client }
         guard let deviceID = deviceIDByClient.removeValue(forKey: client) else { return }
         PushRegistry.shared.markDisconnected(deviceID)
     }
@@ -174,9 +193,9 @@ final class BoardService: BoardServerHandler {
 
         let outcome = apply(request.mutation, to: project)
         switch outcome {
-        case .applied:
+        case .applied(let createdCardID):
             let revision = BoardSnapshotBuilder.revision(of: project)
-            server.send(.ack(requestID: request.id, revision: revision), to: client)
+            server.send(.ack(requestID: request.id, revision: revision, createdCardID: createdCardID), to: client)
             // The `event` that tells every phone is *not* sent from here.
             // `didMutate` reaches the sync coordinator, which is the single
             // publisher of "this board changed" — it also sees edits made on the
@@ -188,9 +207,13 @@ final class BoardService: BoardServerHandler {
         }
     }
 
-    private enum Outcome {
-        case applied
+    enum Outcome {
+        /// `createdCardID` only for `createCard`: the phone needs the id the
+        /// Mac minted to attach images to the card it just made.
+        case applied(createdCardID: String? = nil)
         case rejected(WireFailure.Code, String)
+
+        static let applied = Outcome.applied(createdCardID: nil)
     }
 
     private func apply(_ mutation: BoardMutation, to project: Project) -> Outcome {
@@ -211,7 +234,7 @@ final class BoardService: BoardServerHandler {
             }
             let item = BoardMutations.addItem(titled: title, to: column, in: context)
             item.details = details
-            return .applied
+            return .applied(createdCardID: item.uuid.uuidString)
 
         case .moveCard(let cardID, let columnID, let index):
             guard let item = card(id: cardID, in: project) else {
@@ -281,6 +304,9 @@ final class BoardService: BoardServerHandler {
             context.delete(item)
             return .applied
 
+        case .setSubtask, .addSubtask, .deleteSubtask, .addNote, .setDueDate, .setOwner, .setTags:
+            return applyCardEdit(mutation, in: project)
+
         case .unrecognized(let kind):
             return .rejected(.unsupportedMutation, "This Mac doesn’t understand “\(kind)”.")
         }
@@ -293,22 +319,22 @@ final class BoardService: BoardServerHandler {
     // matters here: a mutation applied to a card deleted a moment ago would
     // succeed, ack, and change nothing anybody can see.
 
-    private func allProjects() -> [Project] {
+    func allProjects() -> [Project] {
         let descriptor = FetchDescriptor<Project>(sortBy: [SortDescriptor(\.sortOrder)])
         return ((try? context.fetch(descriptor)) ?? []).filter { !$0.isDeleted }
     }
 
-    private func project(id: String) -> Project? {
+    func project(id: String) -> Project? {
         guard let uuid = UUID(uuidString: id) else { return nil }
         return allProjects().first { $0.uuid == uuid }
     }
 
-    private func column(id: String, in project: Project) -> BoardColumn? {
+    func column(id: String, in project: Project) -> BoardColumn? {
         guard let uuid = UUID(uuidString: id) else { return nil }
         return project.orderedColumns.first { $0.uuid == uuid }
     }
 
-    private func card(id: String, in project: Project) -> WorkItem? {
+    func card(id: String, in project: Project) -> WorkItem? {
         guard let uuid = UUID(uuidString: id) else { return nil }
         return project.allItems.first { $0.uuid == uuid }
     }

@@ -21,6 +21,7 @@
 import SwiftUI
 import SwiftData
 import UniformTypeIdentifiers
+import ClaudeWMWire
 
 struct CardWindow: View {
     static let sceneID = "card"

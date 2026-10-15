@@ -56,7 +56,7 @@ final class PhoneNotifier: NSObject, UNUserNotificationCenterDelegate {
     /// so the question has context.
     func prepare() {
         UNUserNotificationCenter.current().delegate = self
-        guard isEnabled else { return }
+        guard isEnabled || isFinishedEnabled else { return }
         Task { await requestIfNeeded() }
     }
 
@@ -81,6 +81,21 @@ final class PhoneNotifier: NSObject, UNUserNotificationCenterDelegate {
         willPresent notification: UNNotification
     ) async -> UNNotificationPresentationOptions {
         [.banner, .list]
+    }
+
+    private static let finishedKey = "claudeFinishedNotificationsEnabled"
+
+    /// A card Claude was working on reaching review or done. Separate from
+    /// `isEnabled` so someone can hear about finished work without hearing
+    /// about every drag.
+    var isFinishedEnabled: Bool {
+        get { UserDefaults.standard.object(forKey: Self.finishedKey) as? Bool ?? true }
+        set { UserDefaults.standard.set(newValue, forKey: Self.finishedKey) }
+    }
+
+    func postFinished(_ notice: CardMoveNotice) {
+        guard isFinishedEnabled else { return }
+        Task { await deliver(notice) }
     }
 
     /// Posts a notice, asking for permission first if that has not happened yet

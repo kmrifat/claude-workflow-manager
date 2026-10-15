@@ -117,4 +117,27 @@ extension BoardSnapshot {
         }
         return notices
     }
+
+    /// The moves that mean Claude finished something: a card that was sent to
+    /// Claude arriving in a review or done column. For a phone that wants
+    /// to hear about finished work without hearing about every drag.
+    public func finishedByClaude(since previous: BoardSnapshot, ignoring: Set<String> = []) -> [CardMoveNotice] {
+        var was: [String: WireColumn] = [:]
+        for column in previous.columns {
+            for card in column.cards { was[card.id] = column }
+        }
+        var notices: [CardMoveNotice] = []
+        for column in columns where column.role == .review || column.role == .done {
+            for card in column.cards where card.requested {
+                guard let from = was[card.id], from.id != column.id,
+                      from.role != .review, from.role != .done,
+                      !ignoring.contains(card.id) else { continue }
+                notices.append(CardMoveNotice(
+                    cardTitle: card.title, fromColumn: from.name, toColumn: column.name,
+                    projectName: project.name, origin: .claude
+                ))
+            }
+        }
+        return notices
+    }
 }

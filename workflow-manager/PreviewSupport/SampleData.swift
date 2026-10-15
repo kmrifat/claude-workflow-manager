@@ -4,10 +4,11 @@
 //
 //  The whole file is DEBUG-only: this folder is part of the target's
 //  file-system-synchronized group, so it would otherwise be compiled into
-//  Release builds too.
+//  Release builds too. `LOOPBACK_SAMPLES` lets `Tools/loopback.sh serve` seed
+//  the same boards without compiling every DEBUG-only preview with it.
 //
 
-#if DEBUG
+#if DEBUG || LOOPBACK_SAMPLES
 import Foundation
 import SwiftData
 import AppKit

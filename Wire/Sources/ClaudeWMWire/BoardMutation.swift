@@ -24,6 +24,19 @@ public enum BoardMutation: Sendable, Equatable {
     case setRequested(cardID: String, requested: Bool)
     case deleteCard(cardID: String)
 
+    // The card window's edits, for the phone's card screen. Still nothing for
+    // branch or PR — those stay Claude's.
+
+    case setSubtask(cardID: String, subtaskID: String, done: Bool)
+    case addSubtask(cardID: String, title: String)
+    case deleteSubtask(cardID: String, subtaskID: String)
+    /// A note for Claude, kept in the card's activity where `get_card` hands
+    /// it to the agent.
+    case addNote(cardID: String, note: String)
+    case setDueDate(cardID: String, dueDate: Date?)
+    case setOwner(cardID: String, owner: String)
+    case setTags(cardID: String, tags: [String])
+
     /// A mutation this build has no code for, kept as data.
     ///
     /// Decoding must not throw here. A newer phone will invent verbs, and the
@@ -43,6 +56,13 @@ public enum BoardMutation: Sendable, Equatable {
         case .setPriority:  "setPriority"
         case .setRequested: "setRequested"
         case .deleteCard:   "deleteCard"
+        case .setSubtask:    "setSubtask"
+        case .addSubtask:    "addSubtask"
+        case .deleteSubtask: "deleteSubtask"
+        case .addNote:       "addNote"
+        case .setDueDate:    "setDueDate"
+        case .setOwner:      "setOwner"
+        case .setTags:       "setTags"
         case .unrecognized(let kind): kind
         }
     }
@@ -59,6 +79,13 @@ public enum BoardMutation: Sendable, Equatable {
         case .setPriority(let id, _):         id
         case .setRequested(let id, _):        id
         case .deleteCard(let id):             id
+        case .setSubtask(let id, _, _):       id
+        case .addSubtask(let id, _):          id
+        case .deleteSubtask(let id, _):       id
+        case .addNote(let id, _):             id
+        case .setDueDate(let id, _):          id
+        case .setOwner(let id, _):            id
+        case .setTags(let id, _):             id
         }
     }
 }
@@ -66,6 +93,7 @@ public enum BoardMutation: Sendable, Equatable {
 extension BoardMutation: Codable {
     private enum CodingKeys: String, CodingKey {
         case kind, cardID, columnID, title, details, priority, index, requested
+        case subtaskID, done, note, dueDate, owner, tags
     }
 
     public func encode(to encoder: any Encoder) throws {
@@ -89,6 +117,22 @@ extension BoardMutation: Codable {
             try container.encode(priority, forKey: .priority)
         case .setRequested(_, let requested):
             try container.encode(requested, forKey: .requested)
+        case .setSubtask(_, let subtaskID, let done):
+            try container.encode(subtaskID, forKey: .subtaskID)
+            try container.encode(done, forKey: .done)
+        case .addSubtask(_, let title):
+            try container.encode(title, forKey: .title)
+        case .deleteSubtask(_, let subtaskID):
+            try container.encode(subtaskID, forKey: .subtaskID)
+        case .addNote(_, let note):
+            try container.encode(note, forKey: .note)
+        case .setDueDate(_, let dueDate):
+            // Present-and-null clears the date; absent is malformed.
+            try container.encode(dueDate, forKey: .dueDate)
+        case .setOwner(_, let owner):
+            try container.encode(owner, forKey: .owner)
+        case .setTags(_, let tags):
+            try container.encode(tags, forKey: .tags)
         case .deleteCard, .unrecognized:
             break
         }
@@ -146,6 +190,38 @@ extension BoardMutation: Codable {
         case "deleteCard":
             guard let cardID = string(.cardID) else { break }
             self = .deleteCard(cardID: cardID)
+            return
+        case "setSubtask":
+            guard let cardID = string(.cardID), let subtaskID = string(.subtaskID),
+                  let done = try? container.decode(Bool.self, forKey: .done)
+            else { break }
+            self = .setSubtask(cardID: cardID, subtaskID: subtaskID, done: done)
+            return
+        case "addSubtask":
+            guard let cardID = string(.cardID), let title = string(.title) else { break }
+            self = .addSubtask(cardID: cardID, title: title)
+            return
+        case "deleteSubtask":
+            guard let cardID = string(.cardID), let subtaskID = string(.subtaskID) else { break }
+            self = .deleteSubtask(cardID: cardID, subtaskID: subtaskID)
+            return
+        case "addNote":
+            guard let cardID = string(.cardID), let note = string(.note) else { break }
+            self = .addNote(cardID: cardID, note: note)
+            return
+        case "setDueDate":
+            guard let cardID = string(.cardID), container.contains(.dueDate) else { break }
+            self = .setDueDate(cardID: cardID, dueDate: try? container.decode(Date?.self, forKey: .dueDate))
+            return
+        case "setOwner":
+            guard let cardID = string(.cardID), let owner = string(.owner) else { break }
+            self = .setOwner(cardID: cardID, owner: owner)
+            return
+        case "setTags":
+            guard let cardID = string(.cardID),
+                  let tags = try? container.decode([String].self, forKey: .tags)
+            else { break }
+            self = .setTags(cardID: cardID, tags: tags)
             return
         default:
             break

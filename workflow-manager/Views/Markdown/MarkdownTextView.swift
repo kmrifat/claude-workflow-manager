@@ -20,6 +20,7 @@
 import AppKit
 import SwiftUI
 import UniformTypeIdentifiers
+import ClaudeWMWire
 
 /// Lets the window's toolbar act on the notes: the formatting buttons live
 /// outside the text view but have to edit inside it.

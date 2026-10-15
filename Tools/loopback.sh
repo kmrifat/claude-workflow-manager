@@ -14,6 +14,12 @@
 #  reach a shell, that a symlink pointing out of the repository is refused, and
 #  that dropping the phone does not kill the dev server.
 #
+#  `loopback.sh serve` runs no checks. It serves the sample boards — the ones
+#  `-UseSampleData` shows, on a throwaway store under a throwaway key and its own
+#  Bonjour name — until stopped, and prints a pairing code. Open that code in
+#  the Simulator (`xcrun simctl openurl booted '<code>'`) and the phone app is
+#  talking to a real server without going near your board or your pairing key.
+#
 #  Needs a Debug build first, for SwiftTerm and ClaudeWMWire:
 #
 #    xcodebuild -project workflow-manager.xcodeproj -scheme workflow-manager \
@@ -43,10 +49,13 @@ fi
 SOURCES=$(find workflow-manager -name '*.swift' ! -name 'ClaudeWMApp.swift' | tr '\n' ' ')
 
 mkdir -p "$OUT"
+# `serve` keeps a server up on the sample boards for the phone app to pair with
+# — see the end of this file.
 # shellcheck disable=SC2086
 swiftc -o "$OUT/loopback" \
     Tools/Loopback/main.swift $SOURCES ClaudeWMMobile/BoardTransport.swift \
     -I "$BUILT" "$BUILT/SwiftTerm.o" "$BUILT/ClaudeWMWire.o" \
-    -framework AppKit -framework SwiftData -framework Network -framework UserNotifications
+    -framework AppKit -framework SwiftData -framework Network -framework UserNotifications \
+    -D LOOPBACK_SAMPLES
 
-exec "$OUT/loopback"
+exec "$OUT/loopback" "$@"

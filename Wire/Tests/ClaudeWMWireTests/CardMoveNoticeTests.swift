@@ -109,3 +109,39 @@ private func board(_ columns: [(String, [String])], project: String = "Board") -
                                    projectName: "Other", origin: .claude)
     #expect(elsewhere.identifier != first.identifier)
 }
+
+// MARK: - Claude finishing a card
+
+private func roled(_ columns: [(WireColumnRole, [(String, Bool)])]) -> BoardSnapshot {
+    BoardSnapshot(
+        project: WireProjectRef(id: "P", name: "Board"),
+        columns: columns.map { role, cards in
+            WireColumn(id: role.rawValue, name: role.rawValue, role: role, cards: cards.map {
+                WireCard(id: $0.0, title: $0.0, requested: $0.1, updatedAt: .distantPast)
+            })
+        },
+        revision: 0,
+        capturedAt: .distantPast
+    )
+}
+
+@Test func aRequestedCardReachingReviewIsFinished() {
+    let before = roled([(.inProgress, [("a", true), ("b", false)]), (.review, [])])
+    let after  = roled([(.inProgress, []), (.review, [("a", true), ("b", false)])])
+    let finished = after.finishedByClaude(since: before)
+    // b moved too, but nobody sent it to Claude.
+    #expect(finished.map(\.cardTitle) == ["a"])
+    #expect(finished.first?.origin == .claude)
+}
+
+@Test func reviewToDoneIsNotFinishingTwice() {
+    let before = roled([(.review, [("a", true)]), (.done, [])])
+    let after  = roled([(.review, []), (.done, [("a", true)])])
+    #expect(after.finishedByClaude(since: before).isEmpty)
+}
+
+@Test func yourOwnMoveToReviewIsNotClaudeFinishing() {
+    let before = roled([(.inProgress, [("a", true)]), (.review, [])])
+    let after  = roled([(.inProgress, []), (.review, [("a", true)])])
+    #expect(after.finishedByClaude(since: before, ignoring: ["a"]).isEmpty)
+}

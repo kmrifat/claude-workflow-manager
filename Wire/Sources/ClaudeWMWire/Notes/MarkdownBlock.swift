@@ -1,6 +1,6 @@
 //
 //  MarkdownBlock.swift
-//  workflow-manager
+//  ClaudeWMWire
 //
 //  Block-level Markdown parsing for issue bodies.
 //
@@ -14,7 +14,7 @@
 
 import Foundation
 
-enum MarkdownBlock: Equatable {
+public enum MarkdownBlock: Equatable, Sendable {
     case heading(level: Int, text: String)
     case paragraph(String)
     case listItem(kind: ListKind, indent: Int, text: String)
@@ -23,7 +23,7 @@ enum MarkdownBlock: Equatable {
     case table(header: [String], rows: [[String]])
     case rule
 
-    enum ListKind: Equatable {
+    public enum ListKind: Equatable, Sendable {
         case bullet
         case numbered(String)
         case task(isDone: Bool)
@@ -31,7 +31,7 @@ enum MarkdownBlock: Equatable {
 }
 
 extension MarkdownBlock {
-    static func parse(_ markdown: String) -> [MarkdownBlock] {
+    public static func parse(_ markdown: String) -> [MarkdownBlock] {
         var blocks: [MarkdownBlock] = []
         var paragraph: [String] = []
         var quote: [String] = []

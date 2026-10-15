@@ -8,6 +8,7 @@
 
 import Foundation
 import SwiftData
+import ClaudeWMWire
 
 enum BoardMutations {
 
