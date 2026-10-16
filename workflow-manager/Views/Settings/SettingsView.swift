@@ -259,16 +259,20 @@ struct SettingsView: View {
         } content: {
             SettingsGroup {
                 HStack(alignment: .top, spacing: 0) {
+                    // Each line asks whether its tool exists, so this summary
+                    // cannot disagree with the list below it — it once said
+                    // "no tool for it" beside a create_card that was there.
                     VStack(alignment: .leading, spacing: 10) {
-                        Permission("Read boards and cards", allowed: true)
-                        Permission("Claim a card and move it", allowed: true)
-                        Permission("Check off subtasks, add notes", allowed: true)
+                        Permission("Read boards and cards", allowed: MCPTools.offers("get_card"))
+                        Permission("Claim a card and move it", allowed: MCPTools.offers("claim_card"))
+                        Permission("Check off subtasks, add notes", allowed: MCPTools.offers("add_note"))
+                        Permission("Create cards", allowed: MCPTools.offers("create_card"))
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                     VStack(alignment: .leading, spacing: 10) {
-                        Permission("Set branch and PR link", allowed: true)
+                        Permission("Set branch and PR link", allowed: MCPTools.offers("update_card"))
                         Permission("Rename or rewrite cards", allowed: false)
-                        Permission("Create or delete cards", allowed: false)
+                        Permission("Delete cards", allowed: MCPTools.offers("delete_card"))
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
                 }

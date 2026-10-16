@@ -190,6 +190,8 @@ final class MCPTools {
         ),
     ]
 
+    static func offers(_ name: String) -> Bool { definitions.contains { $0.name == name } }
+
     /// Sent in `initialize`; clients show it to the model as the server's
     /// standing instructions.
     static let instructions = """
