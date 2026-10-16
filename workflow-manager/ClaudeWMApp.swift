@@ -22,6 +22,10 @@ struct ClaudeWMApp: App {
     /// App-level, not per-window: a card window needs both — to send a card to
     /// Claude, and to know whether Claude is reachable at all — and a second
     /// main window must not start a second MCP server on the same port.
+    /// Only for asking about unsaved file edits before quitting; SwiftUI has no
+    /// hook for that.
+    @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
+
     @State private var syncCoordinator = WorkflowSyncCoordinator()
     @State private var mcpServer = MCPServer()
 

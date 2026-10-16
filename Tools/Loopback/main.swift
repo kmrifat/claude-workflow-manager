@@ -501,6 +501,53 @@ let outcome: Void = try MainActor.assumeIsolated {
         check("refuses “\(escape)”", refused, "got \(String(describing: answer))")
     }
 
+    print("\n5b. Saving a file edited in the Mac's Files view")
+    do {
+        let dir = root.appending(path: "editing")
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let file = dir.appending(path: "run.sh")
+        try? "echo one\n".write(to: file, atomically: true, encoding: .utf8)
+        try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: file.path)
+        @MainActor func failure(_ body: () throws -> Void) -> FileSaver.Failure? {
+            do { try body(); return nil } catch let failure as FileSaver.Failure { return failure } catch { return .writeFailed("\(error)") }
+        }
+        func contents(_ url: URL) -> String? { try? String(contentsOf: url, encoding: .utf8) }
+
+        check("an edit saves", failure { try FileSaver.save("echo two\n", to: file, encoding: .utf8, expected: "echo one\n") } == nil
+              && contents(file) == "echo two\n")
+        let mode = (try? FileManager.default.attributesOfItem(atPath: file.path))?[.posixPermissions] as? Int
+        check("a script keeps its execute bit", mode == 0o755)
+
+        try? "echo theirs\n".write(to: file, atomically: true, encoding: .utf8)
+        check("a change made elsewhere stops the save",
+              failure { try FileSaver.save("echo mine\n", to: file, encoding: .utf8, expected: "echo two\n") } == .changedOnDisk
+              && contents(file) == "echo theirs\n")
+        check("…until the user chooses to overwrite it",
+              failure { try FileSaver.save("echo mine\n", to: file, encoding: .utf8, expected: "", force: true) } == nil
+              && contents(file) == "echo mine\n")
+
+        let link = dir.appending(path: "link.sh")
+        try? FileManager.default.createSymbolicLink(at: link, withDestinationURL: file)
+        _ = failure { try FileSaver.save("echo via link\n", to: link, encoding: .utf8, expected: "echo mine\n") }
+        check("saving through a symlink writes its target and keeps the link",
+              (try? FileManager.default.destinationOfSymbolicLink(atPath: link.path)) != nil
+              && contents(file) == "echo via link\n")
+
+        let latin = dir.appending(path: "old.txt")
+        try? "caf\u{e9}".data(using: .isoLatin1)?.write(to: latin)
+        check("a Latin-1 file stays Latin-1",
+              failure { try FileSaver.save("caf\u{e9}s", to: latin, encoding: .isoLatin1, expected: "caf\u{e9}") } == nil
+              && (try? Data(contentsOf: latin)) == "caf\u{e9}s".data(using: .isoLatin1))
+        check("…and refuses what Latin-1 cannot hold",
+              failure { try FileSaver.save("\u{1F600}", to: latin, encoding: .isoLatin1, expected: "caf\u{e9}s") }
+              == .cannotEncode(.isoLatin1))
+
+        try? FileManager.default.removeItem(at: file)
+        check("a deleted file is not quietly recreated",
+              failure { try FileSaver.save("x", to: file, encoding: .utf8, expected: "echo via link\n") } == .missing)
+        try? FileManager.default.removeItem(at: dir)
+    }
+
     print("\n6. A phone that leaves stops being mirrored")
 
     client.drop()

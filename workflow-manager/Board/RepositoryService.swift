@@ -267,7 +267,7 @@ final class RepositoryService {
 
     private func wireContent(_ content: FileTree.Content) -> WireFileContent {
         switch content {
-        case .text(let text):         .text(text)
+        case .text(let text, _):      .text(text)
         case .image(let data):        .image(data)
         case .binary(let size):       .binary(size: size)
         case .tooLarge(let size):     .tooLarge(size: size)
