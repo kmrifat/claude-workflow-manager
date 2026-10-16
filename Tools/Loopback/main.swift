@@ -778,6 +778,20 @@ let outcome: Void = try MainActor.assumeIsolated {
           capped ?? "allowed")
     check("…on that board only", (try? tool("create_card", ["project": other.uuid.uuidString, "title": "Fine"]).get()) != nil)
 
+    let doomed = BoardMutations.addItem(titled: "Delete me", to: project.orderedColumns[0], in: context)
+    try? context.save()
+    let doomedID = doomed.uuid
+    check("delete_card is offered, and marked destructive",
+          MCPTools.definitions.contains { $0.name == "delete_card" && $0.destructive })
+    check("deleting needs a reason",
+          refused(tool("delete_card", ["card_id": doomedID.uuidString, "reason": " "])) != nil
+          && WorkItem.fetch(doomedID, in: context) != nil)
+    let deleted = tool("delete_card", ["card_id": doomedID.uuidString, "reason": "Duplicate of #12."])
+    check("a card is deleted", (try? deleted.get()) != nil && WorkItem.fetch(doomedID, in: context).map(\.isDeleted) ?? true,
+          "\(deleted)")
+    check("a deleted card cannot be deleted again",
+          refused(tool("delete_card", ["card_id": doomedID.uuidString, "reason": "Again"])) != nil)
+
     print("\n9. Through a Cloudflare Tunnel")
 
     // Pure, so checked even when a running Pitwall holds the tunnel's ports.

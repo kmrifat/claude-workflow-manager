@@ -352,7 +352,7 @@ the single publisher). Off by default, switched on in Settings.
   `.mcp.json` alternative would put that token in a file that gets committed.
 - **The tool vocabulary is the field ownership.** Agents report status,
   branch and PR, check subtasks and add notes; there is no tool to rename,
-  rewrite, reprioritise or delete a card — stronger than a tool that refuses.
+  rewrite or reprioritise a card — stronger than a tool that refuses.
   Rules are enforced in `MCPTools`, not trusted to the client: a blocked card
   cannot be claimed, and a status with no column carrying it is an error rather
   than a silent no-op.
@@ -365,6 +365,14 @@ the single publisher). Off by default, switched on in Settings.
   notes the follow-up on both cards. At most `createLimitPerHour` (20) per
   board per hour, counted from those events, so a looping agent cannot bury a
   board. `Tools/loopback.sh` section 8 checks each rule.
+- **`delete_card` deletes any card** (the owner's choice, 2026-10-16, over
+  "only cards Claude made"). A deleted card takes its activity with it, so the
+  trace lives outside it: `reason` is required and the Mac always posts a
+  notification naming the card and the reason, whatever the move-notice
+  setting. Marked `destructiveHint` so a client can ask first; capped at
+  `deleteLimitPerHour` (20) per board, counted in memory since nothing is left
+  in the store to count. It goes through `mutate` like every tool, so ⌘Z does
+  not bring the card back.
 - **Tools validate before they mutate, and never `rollback()`.** Rollback
   discards *every* unsaved change in the shared context, the user's included.
   Mutation and save happen inside one undo-disabled window, as everywhere else.

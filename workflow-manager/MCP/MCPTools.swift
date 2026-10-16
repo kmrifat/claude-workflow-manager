@@ -7,14 +7,19 @@
 //  The vocabulary follows the field ownership `tasks.json` already settled:
 //  an agent reports what only it can know — status, branch, PR — and checks off
 //  subtasks and leaves notes. It cannot rename a card, rewrite its details,
-//  change its priority, send itself work, or delete anything. There is no tool
-//  for any of those, which is a stronger guarantee than a tool that refuses.
+//  change its priority or send itself work. There is no tool for any of those,
+//  which is a stronger guarantee than a tool that refuses.
 //
 //  It can *add* a card (`create_card`) — follow-up work it found, or a big card
 //  split up — and that tool is additive in the way filing a GitHub issue from a
 //  card is: it touches nothing that already exists, the card lands in To Do
 //  never sent to Claude (an agent cannot hand itself work), and its activity
 //  says who made it. A cap per hour keeps a looping agent from burying a board.
+//
+//  It can delete a card (`delete_card`), any card — the owner's choice. A
+//  deleted card takes its activity with it, so the trace has to live outside
+//  it: a reason is required, and the Mac posts a notification naming the card
+//  and the reason. Its own hourly cap stops a runaway clean-up.
 //
 //  Rules are enforced here, on the Mac, never trusted to the client: a blocked
 //  card cannot be claimed, a status needs a column that carries it, and every
@@ -38,6 +43,8 @@ struct MCPToolDefinition {
     let properties: [String: Any]
     let required: [String]
     let readOnly: Bool
+    /// Told to the client, which may ask the user before calling it.
+    var destructive = false
 
     var json: [String: Any] {
         [
@@ -53,7 +60,7 @@ struct MCPToolDefinition {
             "annotations": [
                 "title": title,
                 "readOnlyHint": readOnly,
-                "destructiveHint": false,
+                "destructiveHint": destructive,
                 "idempotentHint": readOnly,
                 "openWorldHint": false,
             ] as [String: Any],
@@ -159,6 +166,18 @@ final class MCPTools {
             readOnly: false
         ),
         MCPToolDefinition(
+            name: "delete_card",
+            title: "Delete card",
+            description: "Delete a card from its board, with its subtasks, notes and images. This cannot be undone. Only do it when the user asked you to, or to remove a card you created by mistake. The user is notified, with your reason.",
+            properties: [
+                "card_id": cardArgument,
+                "reason": ["type": "string", "description": "Why, in a sentence. Shown to the user."],
+            ],
+            required: ["card_id", "reason"],
+            readOnly: false,
+            destructive: true
+        ),
+        MCPToolDefinition(
             name: "add_note",
             title: "Add note",
             description: "Leave a note on a card's activity for the user — a question, a decision, or what is left to do.",
@@ -181,7 +200,7 @@ final class MCPTools {
     3. Before starting a card, call claim_card. Then work.
     4. Record your branch with update_card. When you open a pull request, call update_card with status "review" and pr_url.
     5. Use set_subtask as you finish subtasks, and add_note for anything the user should read.
-    6. Work you find outside the card you are on goes on the board with create_card (pass from_card_id), not into this branch. It waits in To Do for the user.
+    6. Work you find outside the card you are on goes on the board with create_card (pass from_card_id), not into this branch. It waits in To Do for the user. Delete a card only when the user asks, or to undo a card you created by mistake.
     7. The user can leave you notes on a card; get_card returns them in its activity, by "You". Read them before you start and when you resume.
     8. Images in a card's details appear as ![name](attachment:<id>); get_card returns the first few as images you can see.
 
@@ -201,6 +220,7 @@ final class MCPTools {
         case "set_subtask":   return try setSubtask(arguments, client: client, context: context)
         case "add_note":      return try addNote(arguments, client: client, context: context)
         case "create_card":   return try createCard(arguments, client: client, context: context)
+        case "delete_card":   return try deleteCard(arguments, client: client, context: context)
         default:              throw MCPToolError("Unknown tool “\(name)”.")
         }
     }
@@ -500,6 +520,38 @@ final class MCPTools {
         var card = summary(created)
         card["project"] = ["id": project.uuid.uuidString, "name": project.name]
         return ["card": card]
+    }
+
+    /// Cards an agent may delete on one board in an hour.
+    static let deleteLimitPerHour = 20
+    /// When each recent deletion happened, by project. In memory: a deleted
+    /// card leaves nothing in the store to count, and a relaunch starting the
+    /// count again is a fair price.
+    private var deletions: [UUID: [Date]] = [:]
+
+    private func deleteCard(_ arguments: [String: Any], client: String, context: ModelContext) throws -> [String: Any] {
+        let item = try resolveCard(arguments["card_id"], context: context)
+        guard let project = item.project else { throw MCPToolError("That card is not on a board.") }
+        let reason = (arguments["reason"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !reason.isEmpty else { throw MCPToolError("Say why in reason — the user is shown it.") }
+        guard reason.count <= 500 else { throw MCPToolError("Keep the reason under 500 characters.") }
+
+        let hourAgo = Date.now.addingTimeInterval(-3600)
+        let recent = (deletions[project.uuid] ?? []).filter { $0 > hourAgo }
+        guard recent.count < Self.deleteLimitPerHour else {
+            throw MCPToolError("""
+                \(Self.deleteLimitPerHour) cards have already been deleted from “\(project.name)” in the last hour. \
+                Ask the user before deleting more.
+                """)
+        }
+
+        let title = item.title
+        try mutate(project, context: context) {
+            context.delete(item)
+        }
+        deletions[project.uuid] = recent + [.now]
+        BoardNotifier.shared.postDeletion(cardTitle: title, projectName: project.name, actor: client, reason: reason)
+        return ["deleted": ["title": title, "project": project.name]]
     }
 
     // MARK: - Mutation plumbing
