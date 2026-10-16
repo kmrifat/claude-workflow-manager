@@ -723,6 +723,21 @@ let outcome: Void = try MainActor.assumeIsolated {
 
     print("\n8. Through a Cloudflare Tunnel")
 
+    // Pure, so checked even when a running Pitwall holds the tunnel's ports.
+    let refused = """
+        2026-10-16T08:05:14Z ERR Error unmarshaling QuickTunnel response: error code: 1015
+         error="invalid character 'e' looking for beginning of value" status_code="429 Too Many Requests"
+        """
+    check("Cloudflare's rate limit is recognised", TunnelRetry.isRateLimited(refused)
+          && !TunnelRetry.isRateLimited("ERR Provided Tunnel token is not valid."))
+    check("a failed tunnel waits, and waits longer each time",
+          TunnelRetry.delay(afterFailures: 1, rateLimited: false) == 10
+          && TunnelRetry.delay(afterFailures: 2, rateLimited: false) == 20
+          && TunnelRetry.delay(afterFailures: 30, rateLimited: false) == 600)
+    check("…and much longer when Cloudflare said too many requests",
+          TunnelRetry.delay(afterFailures: 1, rateLimited: true) == 120
+          && TunnelRetry.delay(afterFailures: 30, rateLimited: true) == 1800)
+
     let tunnelPorts = [MCPServer.port, BoardServer.relayPort, TunnelGateway.port]
     let held = tunnelPorts.filter { !portIsFree($0) }
     if !held.isEmpty {
