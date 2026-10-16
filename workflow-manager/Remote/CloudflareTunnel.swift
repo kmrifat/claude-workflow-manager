@@ -33,6 +33,13 @@
 //  Pitwall creates nothing in the Cloudflare account — no tunnels, no DNS
 //  records — so switching this off undoes everything it did.
 //
+//  A tunnel that dies is started again, after a wait that doubles each time
+//  (`TunnelRetry`). It used to be started again at once: every failure reaches
+//  `onChange`, whose owner calls `start()`, so a quick tunnel Cloudflare refused
+//  was re-requested every two seconds — which is exactly what keeps Cloudflare
+//  refusing (429, error 1015). A scheduled retry now holds `start()` off until
+//  it is due; switching the tunnel off, or changing its settings, clears it.
+//
 
 import Foundation
 import AppKit
@@ -94,6 +101,11 @@ final class CloudflareTunnel {
     private var process: Process?
     private var watcher: Task<Void, Never>?
     private var isWanted = false
+    /// The next attempt after a failure, and how many failed in a row.
+    private var retry: Task<Void, Never>?
+    private var consecutiveFailures = 0
+    /// When the next attempt is due, for Settings.
+    private(set) var retryAt: Date?
     private let logURL = FileManager.default.temporaryDirectory
         .appending(path: "Pitwall", directoryHint: .isDirectory)
         .appending(path: "cloudflared.log")
@@ -141,13 +153,20 @@ final class CloudflareTunnel {
 
     // MARK: - Lifecycle
 
-    /// Starts if it is not running. Safe to call repeatedly.
+    /// Starts if it is not running. Safe to call repeatedly — and called after
+    /// every change, failures included, so a retry already scheduled is left
+    /// to run at its time rather than jumped.
     func start() {
         isWanted = true
         switch state {
         case .starting, .running: return
         default: break
         }
+        guard retry == nil else { return }
+        launch()
+    }
+
+    private func launch() {
         guard let executable = try? CommandRunner.locate("cloudflared") else {
             state = .notInstalled
             return
@@ -190,6 +209,12 @@ final class CloudflareTunnel {
         isWanted = keepWanted
         watcher?.cancel()
         watcher = nil
+        // Off, or set up differently: whatever was failing is not what runs
+        // next, so the wait starts over.
+        retry?.cancel()
+        retry = nil
+        retryAt = nil
+        consecutiveFailures = 0
         if let process, process.isRunning { process.terminate() }
         process = nil
         UserDefaults.standard.removeObject(forKey: Self.pidKey)
@@ -218,8 +243,11 @@ final class CloudflareTunnel {
 
                 if !process.isRunning {
                     self.process = nil
-                    self.state = .failed(CloudflaredLog.failure(in: log)
-                        ?? "cloudflared stopped (exit \(process.terminationStatus)).")
+                    let reason = CloudflaredLog.failure(in: log) ?? "cloudflared stopped (exit \(process.terminationStatus))."
+                    // Scheduled before `onChange`, whose owner calls `start()`:
+                    // that call must find the retry and wait for it.
+                    let due = self.scheduleRetry(rateLimited: TunnelRetry.isRateLimited(log))
+                    self.state = .failed("\(reason) Trying again at \(due.formatted(date: .omitted, time: .shortened)).")
                     self.onChange?()
                     return
                 }
@@ -227,17 +255,37 @@ final class CloudflareTunnel {
                 switch mode {
                 case .quick:
                     if let url = CloudflaredLog.quickTunnelURL(in: log) {
+                        self.consecutiveFailures = 0
                         self.state = .running(url)
                         self.onChange?()
                     }
                 case .named:
                     if CloudflaredLog.isConnected(log), let url = URL(string: "https://\(hostname)") {
+                        self.consecutiveFailures = 0
                         self.state = .running(url)
                         self.onChange?()
                     }
                 }
             }
         }
+    }
+
+    /// Starts the tunnel again after the wait `TunnelRetry` gives, and returns
+    /// when.
+    private func scheduleRetry(rateLimited: Bool) -> Date {
+        consecutiveFailures += 1
+        let delay = TunnelRetry.delay(afterFailures: consecutiveFailures, rateLimited: rateLimited)
+        let due = Date.now.addingTimeInterval(delay)
+        retryAt = due
+        retry?.cancel()
+        retry = Task { [weak self] in
+            try? await Task.sleep(for: .seconds(delay))
+            guard let self, !Task.isCancelled else { return }
+            self.retry = nil
+            self.retryAt = nil
+            if self.isWanted { self.launch() }
+        }
+        return due
     }
 
     /// A `cloudflared` from a Pitwall that crashed or was force-quit is still
@@ -252,6 +300,28 @@ final class CloudflareTunnel {
             kill(pid, SIGTERM)
         }
         UserDefaults.standard.removeObject(forKey: pidKey)
+    }
+}
+
+// MARK: - Retrying
+
+/// How long to wait before starting a failed tunnel again. Pure, so it can be
+/// checked without a tunnel.
+enum TunnelRetry {
+    /// Doubling from 10 seconds to 10 minutes. When Cloudflare said "too many
+    /// requests", from 2 minutes to 30: asking again soon is what keeps the
+    /// limit in force.
+    static func delay(afterFailures failures: Int, rateLimited: Bool) -> TimeInterval {
+        let base: TimeInterval = rateLimited ? 120 : 10
+        let cap: TimeInterval = rateLimited ? 1800 : 600
+        return min(cap, base * pow(2, Double(min(max(0, failures - 1), 16))))
+    }
+
+    /// Cloudflare's rate limit, as `cloudflared` reports it: an HTTP 429, or
+    /// Cloudflare's own error 1015.
+    static func isRateLimited(_ log: String) -> Bool {
+        log.contains("429") || log.contains("error code: 1015")
+            || log.localizedCaseInsensitiveContains("too many requests")
     }
 }
 

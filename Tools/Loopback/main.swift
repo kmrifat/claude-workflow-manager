@@ -501,6 +501,53 @@ let outcome: Void = try MainActor.assumeIsolated {
         check("refuses “\(escape)”", refused, "got \(String(describing: answer))")
     }
 
+    print("\n5b. Saving a file edited in the Mac's Files view")
+    do {
+        let dir = root.appending(path: "editing")
+        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        let file = dir.appending(path: "run.sh")
+        try? "echo one\n".write(to: file, atomically: true, encoding: .utf8)
+        try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: file.path)
+        @MainActor func failure(_ body: () throws -> Void) -> FileSaver.Failure? {
+            do { try body(); return nil } catch let failure as FileSaver.Failure { return failure } catch { return .writeFailed("\(error)") }
+        }
+        func contents(_ url: URL) -> String? { try? String(contentsOf: url, encoding: .utf8) }
+
+        check("an edit saves", failure { try FileSaver.save("echo two\n", to: file, encoding: .utf8, expected: "echo one\n") } == nil
+              && contents(file) == "echo two\n")
+        let mode = (try? FileManager.default.attributesOfItem(atPath: file.path))?[.posixPermissions] as? Int
+        check("a script keeps its execute bit", mode == 0o755)
+
+        try? "echo theirs\n".write(to: file, atomically: true, encoding: .utf8)
+        check("a change made elsewhere stops the save",
+              failure { try FileSaver.save("echo mine\n", to: file, encoding: .utf8, expected: "echo two\n") } == .changedOnDisk
+              && contents(file) == "echo theirs\n")
+        check("…until the user chooses to overwrite it",
+              failure { try FileSaver.save("echo mine\n", to: file, encoding: .utf8, expected: "", force: true) } == nil
+              && contents(file) == "echo mine\n")
+
+        let link = dir.appending(path: "link.sh")
+        try? FileManager.default.createSymbolicLink(at: link, withDestinationURL: file)
+        _ = failure { try FileSaver.save("echo via link\n", to: link, encoding: .utf8, expected: "echo mine\n") }
+        check("saving through a symlink writes its target and keeps the link",
+              (try? FileManager.default.destinationOfSymbolicLink(atPath: link.path)) != nil
+              && contents(file) == "echo via link\n")
+
+        let latin = dir.appending(path: "old.txt")
+        try? "caf\u{e9}".data(using: .isoLatin1)?.write(to: latin)
+        check("a Latin-1 file stays Latin-1",
+              failure { try FileSaver.save("caf\u{e9}s", to: latin, encoding: .isoLatin1, expected: "caf\u{e9}") } == nil
+              && (try? Data(contentsOf: latin)) == "caf\u{e9}s".data(using: .isoLatin1))
+        check("…and refuses what Latin-1 cannot hold",
+              failure { try FileSaver.save("\u{1F600}", to: latin, encoding: .isoLatin1, expected: "caf\u{e9}s") }
+              == .cannotEncode(.isoLatin1))
+
+        try? FileManager.default.removeItem(at: file)
+        check("a deleted file is not quietly recreated",
+              failure { try FileSaver.save("x", to: file, encoding: .utf8, expected: "echo via link\n") } == .missing)
+        try? FileManager.default.removeItem(at: dir)
+    }
+
     print("\n6. A phone that leaves stops being mirrored")
 
     client.drop()
@@ -731,7 +778,66 @@ let outcome: Void = try MainActor.assumeIsolated {
           capped ?? "allowed")
     check("…on that board only", (try? tool("create_card", ["project": other.uuid.uuidString, "title": "Fine"]).get()) != nil)
 
+    let doomed = BoardMutations.addItem(titled: "Delete me", to: project.orderedColumns[0], in: context)
+    try? context.save()
+    let doomedID = doomed.uuid
+    check("delete_card is offered, and marked destructive",
+          MCPTools.definitions.contains { $0.name == "delete_card" && $0.destructive })
+    check("deleting needs a reason",
+          refused(tool("delete_card", ["card_id": doomedID.uuidString, "reason": " "])) != nil
+          && WorkItem.fetch(doomedID, in: context) != nil)
+    let deleted = tool("delete_card", ["card_id": doomedID.uuidString, "reason": "Duplicate of #12."])
+    check("a card is deleted", (try? deleted.get()) != nil && WorkItem.fetch(doomedID, in: context).map(\.isDeleted) ?? true,
+          "\(deleted)")
+    check("a deleted card cannot be deleted again",
+          refused(tool("delete_card", ["card_id": doomedID.uuidString, "reason": "Again"])) != nil)
+
+    // Renaming and rewriting keep what they replace.
+    let renamed = BoardMutations.addItem(titled: "Old title", to: project.orderedColumns[0], in: context)
+    let renamedPicture = CardAttachment(filename: "shot.png", contentType: "public.png", data: Data([1]), pixelWidth: 1, pixelHeight: 1)
+    context.insert(renamedPicture)
+    renamedPicture.item = renamed
+    let imageLine = renamedPicture.markdownReference
+    renamed.details = "Before.\n\(imageLine)\n"
+    try? context.save()
+    let pid = renamed.uuid.uuidString
+    check("edit_card renames",
+          (try? tool("edit_card", ["card_id": pid, "title": "New title"]).get()) != nil && renamed.title == "New title"
+          && renamed.events.contains { $0.summary == "Renamed from “Old title”" })
+    check("a rewrite that drops an image line is refused, and changes nothing",
+          refused(tool("edit_card", ["card_id": pid, "details": "Gone."]))?.contains(imageLine) == true
+          && renamed.details.hasPrefix("Before."))
+    check("a rewrite that keeps it goes through, and the old notes are kept in the activity",
+          (try? tool("edit_card", ["card_id": pid, "details": "After.\n\(imageLine)"]).get()) != nil
+          && renamed.details == "After.\n\(imageLine)"
+          && renamed.events.contains { $0.summary == "Rewrote the details" && $0.note?.contains("Before.") == true })
+
+    // Switches: off means missing from the list and refused when called.
+    MCPToolSwitches.shared.set("edit_card", on: false)
+    check("a switched-off tool is left out of the list",
+          !MCPTools.enabledDefinitions.contains { $0.name == "edit_card" } && !MCPTools.offers("edit_card"))
+    check("…and refused by a session that listed it earlier",
+          refused(tool("edit_card", ["card_id": pid, "title": "Sneaky"]))?.contains("switched off") == true
+          && renamed.title == "New title")
+    MCPToolSwitches.shared.set("edit_card", on: true)
+    check("switched back on, it works again", (try? tool("edit_card", ["card_id": pid, "title": "Back"]).get()) != nil)
+
     print("\n9. Through a Cloudflare Tunnel")
+
+    // Pure, so checked even when a running Pitwall holds the tunnel's ports.
+    let refused = """
+        2026-10-16T08:05:14Z ERR Error unmarshaling QuickTunnel response: error code: 1015
+         error="invalid character 'e' looking for beginning of value" status_code="429 Too Many Requests"
+        """
+    check("Cloudflare's rate limit is recognised", TunnelRetry.isRateLimited(refused)
+          && !TunnelRetry.isRateLimited("ERR Provided Tunnel token is not valid."))
+    check("a failed tunnel waits, and waits longer each time",
+          TunnelRetry.delay(afterFailures: 1, rateLimited: false) == 10
+          && TunnelRetry.delay(afterFailures: 2, rateLimited: false) == 20
+          && TunnelRetry.delay(afterFailures: 30, rateLimited: false) == 600)
+    check("…and much longer when Cloudflare said too many requests",
+          TunnelRetry.delay(afterFailures: 1, rateLimited: true) == 120
+          && TunnelRetry.delay(afterFailures: 30, rateLimited: true) == 1800)
 
     let tunnelPorts = [MCPServer.port, BoardServer.relayPort, TunnelGateway.port]
     let held = tunnelPorts.filter { !portIsFree($0) }

@@ -351,8 +351,21 @@ the single publisher). Off by default, switched on in Settings.
 - **The connect command uses `--scope user`.** It carries the token, and the
   `.mcp.json` alternative would put that token in a file that gets committed.
 - **The tool vocabulary is the field ownership.** Agents report status,
-  branch and PR, check subtasks and add notes; there is no tool to rename,
-  rewrite, reprioritise or delete a card — stronger than a tool that refuses.
+  branch and PR, check subtasks and add notes; there is no tool to
+  reprioritise a card or send it to Claude — stronger than a tool that
+  refuses.
+- **Every tool has a switch** (Settings › What agents may do › Choose tools;
+  `MCPToolSwitches`, the names switched *off* in `UserDefaults`, so a new tool
+  arrives on). A switched-off tool is left out of `tools/list` *and* refused
+  by `MCPTools.call` — a client lists tools once, when it connects, so the
+  refusal is what reaches a session already open. Settings' summary reads
+  `MCPTools.offers`, never a hand-written list: it once said "no tool for it"
+  over a list that had the tool.
+- **`edit_card` renames and rewrites** (the owner asked, 2026-10-16), keeping
+  what it replaces: the old title and old details go into the card's activity.
+  A rewrite that drops an image's `![…](attachment:…)` line is refused — the
+  line is how the card holds the image, and an unreferenced image is swept
+  when the card's window closes.
   Rules are enforced in `MCPTools`, not trusted to the client: a blocked card
   cannot be claimed, and a status with no column carrying it is an error rather
   than a silent no-op.
@@ -365,6 +378,14 @@ the single publisher). Off by default, switched on in Settings.
   notes the follow-up on both cards. At most `createLimitPerHour` (20) per
   board per hour, counted from those events, so a looping agent cannot bury a
   board. `Tools/loopback.sh` section 8 checks each rule.
+- **`delete_card` deletes any card** (the owner's choice, 2026-10-16, over
+  "only cards Claude made"). A deleted card takes its activity with it, so the
+  trace lives outside it: `reason` is required and the Mac always posts a
+  notification naming the card and the reason, whatever the move-notice
+  setting. Marked `destructiveHint` so a client can ask first; capped at
+  `deleteLimitPerHour` (20) per board, counted in memory since nothing is left
+  in the store to count. It goes through `mutate` like every tool, so ⌘Z does
+  not bring the card back.
 - **Tools validate before they mutate, and never `rollback()`.** Rollback
   discards *every* unsaved change in the shared context, the user's included.
   Mutation and save happen inside one undo-disabled window, as everywhere else.
@@ -524,11 +545,39 @@ come with it. Four things to know:
   dev server. `changeHistorySize` raises it to 5,000 and also updates the options
   the buffer is rebuilt from, so it survives the reset each run does.
 
-**Files** is a read-only browser: lazy per-directory listing (a repository with
+**Files** browses and edits: lazy per-directory listing (a repository with
 `node_modules` has hundreds of thousands of files, so nothing is walked up
-front), a 2MB preview cap, NUL-byte binary sniffing, and images shown inline.
-It does not edit, create, rename or delete — an editor that quietly disagrees
-with the one you actually use is worse than no editor.
+front), a 2MB cap, NUL-byte binary sniffing, and images shown inline. It was
+read-only until the owner asked for editing (2026-10-16); it still does not
+create, rename or delete. The worry that kept it read-only — an editor that
+quietly disagrees with the one you actually use — is what `FileSaver` answers:
+
+- **`CodeEditor` is an `NSTextView`** (TextKit 1, built by hand for the
+  line-number ruler). The old preview drew one `Text` per line, so a selection
+  could not cross a line. No wrapping, no smart quotes, dashes or spelling;
+  Return keeps the indent; ⌘F is the system find bar.
+- **Only `.text` content is editable, and it is always the whole file** —
+  `FileTree.read` refuses a file over the cap rather than truncating it, so a
+  save can never write back half a file. It carries the encoding it was read
+  in (UTF-8, or Latin-1), and saving keeps it, refusing characters Latin-1
+  cannot hold.
+- **A save checks the disk first.** The bytes there must still be what was
+  loaded (`Draft.base`); if an editor, git or Claude changed them, the save
+  stops and asks — overwrite, or revert to disk. A change seen while editing
+  shows a banner instead of replacing what is being typed.
+- **The write is atomic, keeps the file's permissions** (an atomic write is a
+  new inode, which would drop a script's execute bit) **and follows a symlink
+  to its target** rather than replacing the link. `Tools/loopback.sh` §5b
+  checks each.
+- **Unsaved edits live in `FilesSession.drafts`**, not the view, so they
+  survive switching file, tab or project; edited files get a dot in the tree,
+  and `AppDelegate` asks before a quit would lose them.
+- Our own save comes back through the folder watcher; a reload whose text
+  equals what the editor shows is ignored, so saving does not throw the caret
+  to the top.
+- The phone's Files stays read-only — in the protocol, not just the UI.
+
+`-OpenFile <path in the repository>` (Debug) opens a file, for screenshots.
 
 `SyntaxHighlighter` scans left to right in one pass and consumes comments and
 strings *first*. That ordering is the design: a `//` inside a string literal, or

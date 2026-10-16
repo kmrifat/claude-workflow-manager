@@ -117,7 +117,8 @@ struct ProjectDetailView: View {
                 onOpenItem: open
             )
         case .list:
-            ProjectItemsTable(project: project, selectedItemID: $selectedItemID, filter: filter, onOpen: open)
+            ProjectItemsTable(project: project, selectedItemID: $selectedItemID, filter: filter,
+                              focus: focus, onOpen: open)
         case .timeline:
             ProjectTimelineView(project: project, selectedItemID: $selectedItemID, filter: filter, onOpen: open)
         case .issues:
@@ -133,7 +134,7 @@ struct ProjectDetailView: View {
             }
         case .files:
             if let directory = project.repoDirectory {
-                FilesView(root: directory, accent: project.accent.color)
+                FilesView(root: directory, accent: project.accent.color, focus: focus)
             } else {
                 needsRepository(
                     title: "No Repository Linked",

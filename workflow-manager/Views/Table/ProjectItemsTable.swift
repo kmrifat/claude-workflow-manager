@@ -14,6 +14,9 @@ struct ProjectItemsTable: View {
     @Bindable var project: Project
     @Binding var selectedItemID: UUID?
     let filter: BoardFilter
+    /// The window's keyboard pane: a click on a row takes it, so ↑↓ move
+    /// through the rows rather than the sidebar.
+    var focus: FocusState<FocusPane?>.Binding? = nil
     /// Double-click or Return: the card's window.
     var onOpen: (WorkItem) -> Void = { _ in }
 
@@ -71,6 +74,7 @@ struct ProjectItemsTable: View {
                 } primaryAction: { ids in
                     ids.first.map(open)
                 }
+                .pane(focus, .content)
             }
         }
         .background(.background)
@@ -79,7 +83,12 @@ struct ProjectItemsTable: View {
     private var selectionBinding: Binding<Set<UUID>> {
         Binding(
             get: { selectedItemID.map { [$0] } ?? [] },
-            set: { selectedItemID = $0.first }
+            set: {
+                selectedItemID = $0.first
+                // Only a click or a key in the table sets this. Whatever took
+                // the keyboard before, the table has it now.
+                focus?.wrappedValue = .content
+            }
         )
     }
 

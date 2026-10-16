@@ -60,7 +60,30 @@ final class BoardNotifier {
         PushRegistry.shared.push(notice)
     }
 
+    /// An agent deleted a card. Always told, whatever the move setting says:
+    /// the card is gone, with its activity, so this is the only trace of it.
+    func postDeletion(cardTitle: String, projectName: String, actor: String, reason: String) {
+        let content = UNMutableNotificationContent()
+        content.title = "\(actor) deleted “\(cardTitle.isEmpty ? "Untitled" : cardTitle)”"
+        content.subtitle = projectName
+        content.body = reason
+        content.threadIdentifier = "deletions"
+        Task { await deliver(content, identifier: UUID().uuidString) }
+    }
+
     private func deliver(_ notice: CardMoveNotice) async {
+        let content = UNMutableNotificationContent()
+        content.title = notice.title
+        content.subtitle = notice.subtitle
+        content.body = notice.body
+        content.threadIdentifier = notice.threadIdentifier
+        content.sound = nil          // a card moving is not worth a chime
+        // A stable identifier per card replaces the previous banner rather than
+        // stacking a third one behind two stale ones.
+        await deliver(content, identifier: notice.identifier)
+    }
+
+    private func deliver(_ content: UNMutableNotificationContent, identifier: String) async {
         let center = UNUserNotificationCenter.current()
 
         if authorization == nil {
@@ -81,17 +104,8 @@ final class BoardNotifier {
             break
         }
 
-        let content = UNMutableNotificationContent()
-        content.title = notice.title
-        content.subtitle = notice.subtitle
-        content.body = notice.body
-        content.threadIdentifier = notice.threadIdentifier
-        content.sound = nil          // a card moving is not worth a chime
-
-        // A stable identifier per card replaces the previous banner rather than
-        // stacking a third one behind two stale ones.
         let request = UNNotificationRequest(
-            identifier: notice.identifier,
+            identifier: identifier,
             content: content,
             trigger: nil             // deliver now
         )

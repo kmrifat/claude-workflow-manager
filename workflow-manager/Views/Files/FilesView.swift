@@ -17,6 +17,9 @@ import SwiftUI
 struct FilesView: View {
     let root: URL
     var accent: Color = .accentColor
+    /// The window's keyboard pane: choosing a file takes it, so ↑↓ walk the
+    /// tree rather than the sidebar's projects.
+    var focus: FocusState<FocusPane?>.Binding? = nil
 
     /// Tree expansion and the open file live in a per-repository session held by
     /// an app-level store, so they survive both a tab switch (which tears this
@@ -27,13 +30,32 @@ struct FilesView: View {
     @State private var isLoading = false
     /// Bumped to force the preview to re-read the selected file from disk.
     @State private var reloadToken = 0
+    /// Bumped when the editor must take its text from us again: another file,
+    /// or this one reloaded from disk. Not on a save — the editor already has
+    /// that text, and resetting it would throw the caret to the top.
+    @State private var editorToken = 0
+    /// The file and text the editor was last given, to tell a reload that
+    /// changes nothing (our own save, seen by the folder watcher) from news.
+    @State private var shown: (url: URL, text: String)?
+    @State private var saveProblem: SaveProblem?
+
+    /// Why a save stopped, for the alert.
+    private struct SaveProblem: Identifiable {
+        let id = UUID()
+        let url: URL
+        let failure: FileSaver.Failure
+    }
 
     /// The persistent state for this repository. Cheap to fetch — the store
     /// hands back the same instance every time for a given root.
     private var session: FilesSession { store.session(for: root) }
 
     private var selection: Binding<URL?> {
-        Binding(get: { session.selection }, set: { session.selection = $0 })
+        Binding(get: { session.selection }, set: {
+            session.selection = $0
+            // Only a click or a key in the tree sets this.
+            focus?.wrappedValue = .content
+        })
     }
 
     var body: some View {
@@ -51,6 +73,30 @@ struct FilesView: View {
             // The root always appears, so this reliably seeds the top level and
             // starts the watches. Switching project tears the old ones down.
             session.tree.begin(root: root)
+            #if DEBUG
+            // `-OpenFile <path in the repository>`, for screenshots.
+            if session.selection == nil, let path = UserDefaults.standard.string(forKey: "OpenFile") {
+                session.selection = root.appending(path: path)
+            }
+            #endif
+        }
+        .alert(
+            saveProblem?.failure == .changedOnDisk ? "“\(saveProblem?.url.lastPathComponent ?? "")” changed on disk"
+                                                     : "Couldn’t save “\(saveProblem?.url.lastPathComponent ?? "")”",
+            isPresented: Binding(get: { saveProblem != nil }, set: { if !$0 { saveProblem = nil } }),
+            presenting: saveProblem
+        ) { problem in
+            if problem.failure == .changedOnDisk {
+                Button("Overwrite", role: .destructive) { save(problem.url, force: true) }
+                Button("Revert to Disk") { revert(problem.url) }
+                Button("Cancel", role: .cancel) {}
+            } else {
+                Button("OK", role: .cancel) {}
+            }
+        } message: { problem in
+            Text(problem.failure == .changedOnDisk
+                 ? "Something else — another editor, git, or Claude — changed it since you started editing. Overwrite their change with yours, or throw yours away?"
+                 : problem.failure.message)
         }
         .task(id: TaskKey(
             url: session.selection,
@@ -112,9 +158,11 @@ struct FilesView: View {
             Divider()
 
             List(selection: selection) {
-                DirectoryContents(directory: root, accent: accent, model: session.tree)
+                DirectoryContents(directory: root, accent: accent, model: session.tree,
+                                  edited: Set(session.drafts.keys))
             }
             .listStyle(.sidebar)
+            .pane(focus, .content)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(.background)
@@ -134,8 +182,19 @@ struct FilesView: View {
                         ProgressView().frame(maxWidth: .infinity, maxHeight: .infinity)
                     } else {
                         switch content {
-                        case .text(let text):
-                            FilePreviewText(text: text, url: selection)
+                        case .text(let text, _):
+                            CodeEditor(
+                                text: session.drafts[selection]?.text ?? text,
+                                loadToken: editorToken,
+                                language: SyntaxHighlighter.language(forExtension: selection.pathExtension,
+                                                                     filename: selection.lastPathComponent),
+                                onChange: { edited($0, in: selection) }
+                            )
+                            .safeAreaInset(edge: .top, spacing: 0) {
+                                if session.drafts[selection]?.changedOnDisk == true {
+                                    changedOnDiskBanner(selection)
+                                }
+                            }
                         case .image(let data):
                             imagePreview(data)
                         case .binary(let size):
@@ -171,7 +230,7 @@ struct FilesView: View {
             ContentUnavailableView {
                 Label("No File Selected", systemImage: "doc.text")
             } description: {
-                Text("Pick a file on the left to read it.")
+                Text("Pick a file on the left to read or edit it.")
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
@@ -191,7 +250,17 @@ struct FilesView: View {
 
             Spacer()
 
-            if case .text(let text) = content {
+            if session.drafts[url] != nil {
+                Text("Edited")
+                    .font(.system(size: 10, weight: .medium))
+                    .foregroundStyle(.secondary)
+                Button("Revert") { revert(url) }
+                    .controlSize(.small)
+                    .help("Throw away your changes and show the file as it is on disk")
+                Button("Save") { save(url) }
+                    .controlSize(.small)
+                    .keyboardShortcut("s", modifiers: .command)
+            } else if case .text(let text, _) = content {
                 Text("\(text.reduce(into: 1) { count, c in if c == "\n" { count += 1 } }) lines")
                     .font(.system(size: 10))
                     .foregroundStyle(.secondary)
@@ -273,9 +342,97 @@ struct FilesView: View {
         defer { isLoading = false }
         // Reading and sniffing happen off the main actor — a 2MB file on a slow
         // disk should not stall a frame.
-        content = await Task.detached(priority: .userInitiated) {
+        let read = await Task.detached(priority: .userInitiated) {
             FileTree.read(url)
         }.value
+        guard session.selection == url else { return }
+        content = read
+
+        guard case .text(let text, _) = read else {
+            shown = nil
+            return
+        }
+        if var draft = session.drafts[url] {
+            // Unsaved edits win: never replace what someone is typing. If the
+            // file moved underneath them, say so instead.
+            if text != draft.base, !draft.changedOnDisk {
+                draft.changedOnDisk = true
+                session.drafts[url] = draft
+            }
+            if shown?.url != url {
+                shown = (url, draft.text)
+                editorToken += 1
+            }
+            return
+        }
+        // The same file with the same text — our own save coming back through
+        // the folder watcher — leaves the editor, and its caret, alone.
+        if let shown, shown.url == url, shown.text == text { return }
+        shown = (url, text)
+        editorToken += 1
+    }
+
+    // MARK: - Editing
+
+    private func edited(_ text: String, in url: URL) {
+        guard case .text(let disk, let encoding) = content else { return }
+        let base = session.drafts[url]?.base ?? disk
+        if text == base {
+            session.drafts[url] = nil
+        } else {
+            var draft = session.drafts[url] ?? FilesSession.Draft(text: text, base: base, encoding: encoding)
+            draft.text = text
+            session.drafts[url] = draft
+        }
+        shown = (url, text)
+    }
+
+    private func save(_ url: URL, force: Bool = false) {
+        guard let draft = session.drafts[url] else { return }
+        do {
+            try FileSaver.save(draft.text, to: url, encoding: draft.encoding, expected: draft.base, force: force)
+            session.drafts[url] = nil
+            if session.selection == url {
+                content = .text(draft.text, encoding: draft.encoding)
+                shown = (url, draft.text)
+            }
+        } catch let failure as FileSaver.Failure {
+            saveProblem = SaveProblem(url: url, failure: failure)
+        } catch {
+            saveProblem = SaveProblem(url: url, failure: .writeFailed(error.localizedDescription))
+        }
+    }
+
+    /// Throws the edits away and shows the file as it is now.
+    private func revert(_ url: URL) {
+        session.drafts[url] = nil
+        shown = nil
+        reloadToken += 1
+    }
+
+    private func changedOnDiskBanner(_ url: URL) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: "exclamationmark.triangle.fill")
+                .foregroundStyle(.orange)
+            Text("This file changed on disk while you were editing it.")
+                .font(.system(size: 11))
+            Spacer()
+            Button("Show Disk Version") { revert(url) }
+                .controlSize(.small)
+            Button("Keep Mine") {
+                // Theirs is now what "mine" is measured against, so the next
+                // save writes without asking again.
+                if var draft = session.drafts[url], let disk = FileTree.read(url).text {
+                    draft.base = disk
+                    draft.changedOnDisk = false
+                    session.drafts[url] = draft
+                }
+            }
+            .controlSize(.small)
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 6)
+        .background(.orange.opacity(0.12))
     }
 }
 
@@ -287,6 +444,20 @@ final class FilesSession {
     let root: URL
     let tree = FileTreeModel()
     var selection: URL?
+    /// Unsaved edits, by file. Kept here rather than in the view so they
+    /// survive switching file, tab or project — the way an editor keeps a
+    /// modified tab — and so quitting can ask about them.
+    var drafts: [URL: Draft] = [:]
+
+    struct Draft {
+        var text: String
+        /// The file as it was when editing began: what a save expects to find
+        /// on disk, so a change made elsewhere is noticed rather than
+        /// overwritten.
+        var base: String
+        var encoding: String.Encoding
+        var changedOnDisk = false
+    }
 
     init(root: URL) { self.root = root }
 }
@@ -302,6 +473,20 @@ final class FilesStateStore {
     // observed on its own. Publishing dictionary inserts would mean mutating
     // observed state mid-render.
     @ObservationIgnored private var sessions: [URL: FilesSession] = [:]
+
+    /// Every window's store, so quitting can ask about unsaved edits in any
+    /// of them.
+    @MainActor private static var all: [WeakStore] = []
+    private struct WeakStore { weak var store: FilesStateStore? }
+
+    init() {
+        Self.all.append(WeakStore(store: self))
+    }
+
+    /// Files with unsaved edits, across every window.
+    @MainActor static var unsavedFiles: [URL] {
+        all.compactMap(\.store).flatMap { $0.sessions.values.flatMap { $0.drafts.keys } }
+    }
 
     func session(for root: URL) -> FilesSession {
         if let existing = sessions[root] { return existing }
@@ -436,12 +621,15 @@ private struct DirectoryContents: View {
     let directory: URL
     let accent: Color
     let model: FileTreeModel
+    /// Files with unsaved edits, marked with a dot as an editor marks a
+    /// modified tab.
+    var edited: Set<URL> = []
 
     var body: some View {
         ForEach(model.children(of: directory)) { node in
             if node.isDirectory {
                 DisclosureGroup(isExpanded: expansion(for: node.url)) {
-                    DirectoryContents(directory: node.url, accent: accent, model: model)
+                    DirectoryContents(directory: node.url, accent: accent, model: model, edited: edited)
                 } label: {
                     Label(node.name, systemImage: "folder.fill")
                         .font(.system(size: 12))
@@ -449,7 +637,13 @@ private struct DirectoryContents: View {
                 }
             } else {
                 Label {
-                    Text(node.name).font(.system(size: 12))
+                    HStack(spacing: 4) {
+                        Text(node.name).font(.system(size: 12))
+                        if edited.contains(node.url) {
+                            Circle().fill(.secondary).frame(width: 6, height: 6)
+                                .help("Unsaved changes")
+                        }
+                    }
                 } icon: {
                     Image(systemName: icon(for: node))
                         .foregroundStyle(.secondary)

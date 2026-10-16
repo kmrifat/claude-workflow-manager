@@ -83,13 +83,26 @@ nonisolated enum FileTree {
     static let previewSizeLimit = 2 * 1024 * 1024
 
     enum Content: Sendable {
-        case text(String)
+        /// The whole file — never a part of one, which is what makes it safe
+        /// to edit and save back. `encoding` is how it was read, and how it is
+        /// written.
+        case text(String, encoding: String.Encoding)
         case image(Data)
         case binary(size: Int)
         case tooLarge(size: Int)
         case unreadable(String)
     }
+}
 
+extension FileTree.Content {
+    /// The text, if this is a text file.
+    var text: String? {
+        if case .text(let text, _) = self { return text }
+        return nil
+    }
+}
+
+extension FileTree {
     static let imageExtensions: Set<String> = [
         "png", "jpg", "jpeg", "gif", "heic", "bmp", "tiff", "webp", "icns",
     ]
@@ -112,11 +125,11 @@ nonisolated enum FileTree {
         guard !looksBinary(data) else { return .binary(size: size) }
 
         if let text = String(data: data, encoding: .utf8) {
-            return .text(text)
+            return .text(text, encoding: .utf8)
         }
         // Older files in a repository are often Latin-1 rather than broken.
         if let text = String(data: data, encoding: .isoLatin1) {
-            return .text(text)
+            return .text(text, encoding: .isoLatin1)
         }
         return .binary(size: size)
     }
