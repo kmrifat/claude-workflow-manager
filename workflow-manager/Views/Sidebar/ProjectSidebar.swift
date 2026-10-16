@@ -1074,8 +1074,15 @@ struct ProjectSidebar: View {
         activate(node)
     }
 
-    private var isBoardShowing: Bool {
-        destination.projectID != nil && viewMode == .board
+    /// Where Tab and Return hand the keyboard: the board, or a detail that is
+    /// a list of its own. nil when the detail has no keyboard pane.
+    private var detailPane: FocusPane? {
+        guard destination.projectID != nil else { return nil }
+        switch viewMode {
+        case .board: return .board
+        case .list, .files: return .content
+        default: return nil
+        }
     }
 
     private func handleKey(_ press: KeyPress) -> KeyPress.Result {
@@ -1113,7 +1120,7 @@ struct ProjectSidebar: View {
             default:
                 activate(cursor)
                 // Return means "go in": the board, when that is what opened.
-                if isBoardShowing { focus.wrappedValue = .board }
+                if let detailPane { focus.wrappedValue = detailPane }
             }
         case .space:
             // Mid-name, a space is part of the name being typed.
@@ -1125,8 +1132,8 @@ struct ProjectSidebar: View {
                 activate(cursor)
             }
         case .tab:
-            guard !press.modifiers.contains(.shift), isBoardShowing else { return .ignored }
-            focus.wrappedValue = .board
+            guard !press.modifiers.contains(.shift), let detailPane else { return .ignored }
+            focus.wrappedValue = detailPane
         case .escape:
             guard isFiltering else { return .ignored }
             filterText = ""

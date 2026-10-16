@@ -17,6 +17,9 @@ import SwiftUI
 struct FilesView: View {
     let root: URL
     var accent: Color = .accentColor
+    /// The window's keyboard pane: choosing a file takes it, so ↑↓ walk the
+    /// tree rather than the sidebar's projects.
+    var focus: FocusState<FocusPane?>.Binding? = nil
 
     /// Tree expansion and the open file live in a per-repository session held by
     /// an app-level store, so they survive both a tab switch (which tears this
@@ -33,7 +36,11 @@ struct FilesView: View {
     private var session: FilesSession { store.session(for: root) }
 
     private var selection: Binding<URL?> {
-        Binding(get: { session.selection }, set: { session.selection = $0 })
+        Binding(get: { session.selection }, set: {
+            session.selection = $0
+            // Only a click or a key in the tree sets this.
+            focus?.wrappedValue = .content
+        })
     }
 
     var body: some View {
@@ -115,6 +122,7 @@ struct FilesView: View {
                 DirectoryContents(directory: root, accent: accent, model: session.tree)
             }
             .listStyle(.sidebar)
+            .pane(focus, .content)
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .background(.background)
