@@ -10,6 +10,12 @@
 //  change its priority, send itself work, or delete anything. There is no tool
 //  for any of those, which is a stronger guarantee than a tool that refuses.
 //
+//  It can *add* a card (`create_card`) — follow-up work it found, or a big card
+//  split up — and that tool is additive in the way filing a GitHub issue from a
+//  card is: it touches nothing that already exists, the card lands in To Do
+//  never sent to Claude (an agent cannot hand itself work), and its activity
+//  says who made it. A cap per hour keeps a looping agent from burying a board.
+//
 //  Rules are enforced here, on the Mac, never trusted to the client: a blocked
 //  card cannot be claimed, a status needs a column that carries it, and every
 //  change is saved with undo disabled — ⌘Z must not undo an agent's work
@@ -139,6 +145,20 @@ final class MCPTools {
             readOnly: false
         ),
         MCPToolDefinition(
+            name: "create_card",
+            title: "Create card",
+            description: "Add a new card to a project's board — follow-up work you found, or a large card split into smaller ones. It lands in To Do and is not sent to you: the user decides whether and when it is worked on. Pass from_card_id when it comes out of a card you are working on, so both cards say so.",
+            properties: [
+                "project": projectArgument,
+                "title": ["type": "string", "description": "Short, like a commit subject."],
+                "details": ["type": "string", "description": "Markdown: what and why, and what done looks like."],
+                "subtasks": ["type": "array", "items": ["type": "string"], "description": "Optional checklist, in order."],
+                "from_card_id": ["type": "string", "description": "The card this came out of, if any."],
+            ],
+            required: ["project", "title"],
+            readOnly: false
+        ),
+        MCPToolDefinition(
             name: "add_note",
             title: "Add note",
             description: "Leave a note on a card's activity for the user — a question, a decision, or what is left to do.",
@@ -161,8 +181,9 @@ final class MCPTools {
     3. Before starting a card, call claim_card. Then work.
     4. Record your branch with update_card. When you open a pull request, call update_card with status "review" and pr_url.
     5. Use set_subtask as you finish subtasks, and add_note for anything the user should read.
-    6. The user can leave you notes on a card; get_card returns them in its activity, by "You". Read them before you start and when you resume.
-    7. Images in a card's details appear as ![name](attachment:<id>); get_card returns the first few as images you can see.
+    6. Work you find outside the card you are on goes on the board with create_card (pass from_card_id), not into this branch. It waits in To Do for the user.
+    7. The user can leave you notes on a card; get_card returns them in its activity, by "You". Read them before you start and when you resume.
+    8. Images in a card's details appear as ![name](attachment:<id>); get_card returns the first few as images you can see.
 
     Never move a card to "done" yourself unless the user asked; review is where your work stops.
     """
@@ -179,6 +200,7 @@ final class MCPTools {
         case "update_card":   return try updateCard(arguments, client: client, context: context)
         case "set_subtask":   return try setSubtask(arguments, client: client, context: context)
         case "add_note":      return try addNote(arguments, client: client, context: context)
+        case "create_card":   return try createCard(arguments, client: client, context: context)
         default:              throw MCPToolError("Unknown tool “\(name)”.")
         }
     }
@@ -395,6 +417,89 @@ final class MCPTools {
             record(item, client: client, tool: "add_note", summary: "Added a note", note: text, context: context)
         }
         return ["ok": true]
+    }
+
+    /// Cards an agent may create on one board in an hour. Generous for a
+    /// split or a run of follow-ups; a loop hits it long before the board is
+    /// unreadable.
+    static let createLimitPerHour = 20
+    static let maxSubtasks = 30
+
+    private func createCard(_ arguments: [String: Any], client: String, context: ModelContext) throws -> [String: Any] {
+        let project = try resolveProject(arguments["project"], context: context)
+        let title = (arguments["title"] as? String ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+            .replacingOccurrences(of: "\n", with: " ")
+        guard !title.isEmpty else { throw MCPToolError("A card needs a title.") }
+        guard title.count <= 200 else { throw MCPToolError("Keep the title under 200 characters; put the rest in details.") }
+        let details = (arguments["details"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+        guard details.count <= 20_000 else { throw MCPToolError("Keep details under 20,000 characters.") }
+        if arguments["subtasks"] != nil, !(arguments["subtasks"] is [Any]) {
+            throw MCPToolError("subtasks must be a list of strings.")
+        }
+        let subtasks = (arguments["subtasks"] as? [Any] ?? [])
+            .compactMap { ($0 as? String)?.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        guard subtasks.count <= Self.maxSubtasks else {
+            throw MCPToolError("At most \(Self.maxSubtasks) subtasks. Split the work into more than one card.")
+        }
+        guard subtasks.allSatisfy({ $0.count <= 200 }) else { throw MCPToolError("Keep each subtask under 200 characters.") }
+
+        // The card it came out of must be on this board: a follow-up filed on
+        // another project would point at a card the user cannot see from here.
+        var source: WorkItem?
+        if let raw = arguments["from_card_id"] {
+            let card = try resolveCard(raw, context: context)
+            guard card.project?.uuid == project.uuid else {
+                throw MCPToolError("from_card_id is a card on another project. Create the card there, or leave from_card_id out.")
+            }
+            source = card
+        }
+
+        let hourAgo = Date.now.addingTimeInterval(-3600)
+        // Counted from the cards' own "Created by" events — there is no other
+        // record, and a deleted card's no longer counts, which is fair.
+        let recent = project.allItems.reduce(0) { count, item in
+            count + item.events.count {
+                !$0.isDeleted && $0.tool == "create_card" && $0.summary.hasPrefix("Created by") && $0.date > hourAgo
+            }
+        }
+        guard recent < Self.createLimitPerHour else {
+            throw MCPToolError("""
+                \(Self.createLimitPerHour) cards have already been created on “\(project.name)” in the last hour. \
+                Put the rest in a note with add_note and let the user decide.
+                """)
+        }
+
+        // To Do, never a column the agent picks: where work waits for the
+        // user. A board with no To Do role gets it in its first column.
+        guard let column = project.column(for: .todo) ?? project.orderedColumns.first else {
+            throw MCPToolError("“\(project.name)” has no columns to put a card in.")
+        }
+
+        var created: WorkItem?
+        try mutate(project, context: context) {
+            let item = BoardMutations.addItem(titled: title, to: column, in: context)
+            item.details = details
+            var order = 0.0
+            for title in subtasks {
+                order = FractionalOrder.afterLast(of: [order])
+                let subtask = Subtask(title: title, sortOrder: order)
+                context.insert(subtask)
+                subtask.item = item
+            }
+            let origin = source.map { " from “\($0.title)”" } ?? ""
+            record(item, client: client, tool: "create_card", summary: "Created by \(client)\(origin)", context: context)
+            if let source {
+                record(source, client: client, tool: "create_card", summary: "Created follow-up “\(title)”",
+                       context: context)
+            }
+            created = item
+        }
+        guard let created else { throw MCPToolError("The card could not be created.") }
+        var card = summary(created)
+        card["project"] = ["id": project.uuid.uuidString, "name": project.name]
+        return ["card": card]
     }
 
     // MARK: - Mutation plumbing

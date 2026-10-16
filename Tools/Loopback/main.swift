@@ -674,7 +674,64 @@ let outcome: Void = try MainActor.assumeIsolated {
     check("the overview answers", cards.waitFor("overview") { if case .overview = $0 { true } else { false } } != nil)
     cards.drop()
 
-    print("\n8. Through a Cloudflare Tunnel")
+    print("\n8. An agent creating a card over MCP")
+
+    let tools = MCPTools()
+    tools.context = context
+    let other = Project(name: "Elsewhere")
+    context.insert(other)
+    BoardMutations.makeDefaultColumns(for: other, in: context)
+    let parent = BoardMutations.addItem(titled: "Split me", to: project.orderedColumns[1], in: context)
+    let stranger = BoardMutations.addItem(titled: "Not here", to: other.orderedColumns[0], in: context)
+    try? context.save()
+
+    @MainActor func tool(_ name: String, _ arguments: [String: Any]) -> Result<[String: Any], MCPToolError> {
+        do { return .success(try tools.call(name, arguments: arguments, client: "loopback")) }
+        catch let error as MCPToolError { return .failure(error) }
+        catch { return .failure(MCPToolError("\(error)")) }
+    }
+    @MainActor func refused(_ result: Result<[String: Any], MCPToolError>) -> String? {
+        if case .failure(let error) = result { return error.message }
+        return nil
+    }
+
+    check("create_card is offered to agents", MCPTools.definitions.contains { $0.name == "create_card" && !$0.readOnly })
+    let made = tool("create_card", [
+        "project": projectID, "title": "Follow-up: retry path",
+        "details": "Found while on **Split me**.", "subtasks": ["Reproduce", "Fix", "Test"],
+        "from_card_id": parent.uuid.uuidString,
+    ])
+    let newID = (try? made.get()["card"] as? [String: Any])?["id"] as? String
+    let newCard = newID.flatMap(UUID.init(uuidString:)).flatMap { WorkItem.fetch($0, in: context) }
+    check("the card is made", newCard != nil, "\(made)")
+    if let newCard {
+        check("it lands in To Do", newCard.column?.uuid == project.column(for: .todo)?.uuid)
+        check("it is not sent to Claude — an agent cannot hand itself work", !newCard.workflowRequested)
+        check("its title and notes are what was asked",
+              newCard.title == "Follow-up: retry path" && newCard.details == "Found while on **Split me**.")
+        check("its subtasks keep their order", newCard.orderedSubtasks.map(\.title) == ["Reproduce", "Fix", "Test"])
+        check("it says who made it, and from what",
+              newCard.events.contains { $0.summary == "Created by loopback from “Split me”" && $0.tool == "create_card" })
+    }
+    check("the card it came from says so too",
+          parent.events.contains { $0.summary == "Created follow-up “Follow-up: retry path”" })
+
+    check("a card needs a title", refused(tool("create_card", ["project": projectID, "title": "  "])) != nil)
+    check("subtasks must be a list",
+          refused(tool("create_card", ["project": projectID, "title": "x", "subtasks": "one, two"])) != nil)
+    check("from_card_id must be on the same project",
+          refused(tool("create_card", ["project": projectID, "title": "x",
+                                       "from_card_id": stranger.uuid.uuidString]))?.contains("another project") == true)
+
+    for n in 2...MCPTools.createLimitPerHour {
+        _ = tool("create_card", ["project": projectID, "title": "Card \(n)"])
+    }
+    let capped = refused(tool("create_card", ["project": projectID, "title": "One too many"]))
+    check("a looping agent is stopped at \(MCPTools.createLimitPerHour) an hour", capped?.contains("last hour") == true,
+          capped ?? "allowed")
+    check("…on that board only", (try? tool("create_card", ["project": other.uuid.uuidString, "title": "Fine"]).get()) != nil)
+
+    print("\n9. Through a Cloudflare Tunnel")
 
     let tunnelPorts = [MCPServer.port, BoardServer.relayPort, TunnelGateway.port]
     let held = tunnelPorts.filter { !portIsFree($0) }
@@ -782,7 +839,7 @@ let outcome: Void = try MainActor.assumeIsolated {
     // A real quick tunnel through Cloudflare, opt-in: it puts this Mac on a
     // public address for as long as it runs. `LOOPBACK_CLOUDFLARE=1`.
     if ProcessInfo.processInfo.environment["LOOPBACK_CLOUDFLARE"] == "1" {
-        print("\n9. Live, through Cloudflare")
+        print("\n10. Live, through Cloudflare")
         let tunnel = CloudflareTunnel.shared
         tunnel.mode = .quick
         tunnel.start()

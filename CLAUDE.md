@@ -352,10 +352,19 @@ the single publisher). Off by default, switched on in Settings.
   `.mcp.json` alternative would put that token in a file that gets committed.
 - **The tool vocabulary is the field ownership.** Agents report status,
   branch and PR, check subtasks and add notes; there is no tool to rename,
-  rewrite, reprioritise, create or delete a card — stronger than a tool that
-  refuses. Rules are enforced in `MCPTools`, not trusted to the client: a
-  blocked card cannot be claimed, and a status with no column carrying it is an
-  error rather than a silent no-op.
+  rewrite, reprioritise or delete a card — stronger than a tool that refuses.
+  Rules are enforced in `MCPTools`, not trusted to the client: a blocked card
+  cannot be claimed, and a status with no column carrying it is an error rather
+  than a silent no-op.
+- **`create_card` adds, and only adds** (asked for by the owner, 2026-10-16) —
+  follow-up work an agent found, or a big card split up. Like
+  `GitHubCLI.createIssue` it touches nothing that exists. The card lands in the
+  To Do column (the first column on a board without roles), is **never**
+  `workflowRequested`, so an agent cannot hand itself work, and its activity
+  says "Created by <client>". `from_card_id` must be on the same board and
+  notes the follow-up on both cards. At most `createLimitPerHour` (20) per
+  board per hour, counted from those events, so a looping agent cannot bury a
+  board. `Tools/loopback.sh` section 8 checks each rule.
 - **Tools validate before they mutate, and never `rollback()`.** Rollback
   discards *every* unsaved change in the shared context, the user's included.
   Mutation and save happen inside one undo-disabled window, as everywhere else.
