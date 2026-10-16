@@ -351,8 +351,21 @@ the single publisher). Off by default, switched on in Settings.
 - **The connect command uses `--scope user`.** It carries the token, and the
   `.mcp.json` alternative would put that token in a file that gets committed.
 - **The tool vocabulary is the field ownership.** Agents report status,
-  branch and PR, check subtasks and add notes; there is no tool to rename,
-  rewrite or reprioritise a card — stronger than a tool that refuses.
+  branch and PR, check subtasks and add notes; there is no tool to
+  reprioritise a card or send it to Claude — stronger than a tool that
+  refuses.
+- **Every tool has a switch** (Settings › What agents may do › Choose tools;
+  `MCPToolSwitches`, the names switched *off* in `UserDefaults`, so a new tool
+  arrives on). A switched-off tool is left out of `tools/list` *and* refused
+  by `MCPTools.call` — a client lists tools once, when it connects, so the
+  refusal is what reaches a session already open. Settings' summary reads
+  `MCPTools.offers`, never a hand-written list: it once said "no tool for it"
+  over a list that had the tool.
+- **`edit_card` renames and rewrites** (the owner asked, 2026-10-16), keeping
+  what it replaces: the old title and old details go into the card's activity.
+  A rewrite that drops an image's `![…](attachment:…)` line is refused — the
+  line is how the card holds the image, and an unreferenced image is swept
+  when the card's window closes.
   Rules are enforced in `MCPTools`, not trusted to the client: a blocked card
   cannot be claimed, and a status with no column carrying it is an error rather
   than a silent no-op.

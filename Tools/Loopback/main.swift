@@ -792,6 +792,36 @@ let outcome: Void = try MainActor.assumeIsolated {
     check("a deleted card cannot be deleted again",
           refused(tool("delete_card", ["card_id": doomedID.uuidString, "reason": "Again"])) != nil)
 
+    // Renaming and rewriting keep what they replace.
+    let renamed = BoardMutations.addItem(titled: "Old title", to: project.orderedColumns[0], in: context)
+    let renamedPicture = CardAttachment(filename: "shot.png", contentType: "public.png", data: Data([1]), pixelWidth: 1, pixelHeight: 1)
+    context.insert(renamedPicture)
+    renamedPicture.item = renamed
+    let imageLine = renamedPicture.markdownReference
+    renamed.details = "Before.\n\(imageLine)\n"
+    try? context.save()
+    let pid = renamed.uuid.uuidString
+    check("edit_card renames",
+          (try? tool("edit_card", ["card_id": pid, "title": "New title"]).get()) != nil && renamed.title == "New title"
+          && renamed.events.contains { $0.summary == "Renamed from “Old title”" })
+    check("a rewrite that drops an image line is refused, and changes nothing",
+          refused(tool("edit_card", ["card_id": pid, "details": "Gone."]))?.contains(imageLine) == true
+          && renamed.details.hasPrefix("Before."))
+    check("a rewrite that keeps it goes through, and the old notes are kept in the activity",
+          (try? tool("edit_card", ["card_id": pid, "details": "After.\n\(imageLine)"]).get()) != nil
+          && renamed.details == "After.\n\(imageLine)"
+          && renamed.events.contains { $0.summary == "Rewrote the details" && $0.note?.contains("Before.") == true })
+
+    // Switches: off means missing from the list and refused when called.
+    MCPToolSwitches.shared.set("edit_card", on: false)
+    check("a switched-off tool is left out of the list",
+          !MCPTools.enabledDefinitions.contains { $0.name == "edit_card" } && !MCPTools.offers("edit_card"))
+    check("…and refused by a session that listed it earlier",
+          refused(tool("edit_card", ["card_id": pid, "title": "Sneaky"]))?.contains("switched off") == true
+          && renamed.title == "New title")
+    MCPToolSwitches.shared.set("edit_card", on: true)
+    check("switched back on, it works again", (try? tool("edit_card", ["card_id": pid, "title": "Back"]).get()) != nil)
+
     print("\n9. Through a Cloudflare Tunnel")
 
     // Pure, so checked even when a running Pitwall holds the tunnel's ports.

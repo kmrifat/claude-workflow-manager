@@ -10,6 +10,16 @@
 //  change its priority or send itself work. There is no tool for any of those,
 //  which is a stronger guarantee than a tool that refuses.
 //
+//  Rename and rewrite are the exception the owner asked for (`edit_card`), and
+//  they keep what they replace: the old title and the old notes go into the
+//  card's activity, and a rewrite that would drop an image's line is refused —
+//  the line is how the card holds the image.
+//
+//  Every tool can be switched off in Settings (`MCPToolSwitches`). A switched-
+//  off tool is left out of `tools/list` and refused by `call`, which matters
+//  because a client lists tools once, when it connects: the refusal is what
+//  reaches a session that is already open.
+//
 //  It can *add* a card (`create_card`) — follow-up work it found, or a big card
 //  split up — and that tool is additive in the way filing a GitHub issue from a
 //  card is: it touches nothing that already exists, the card lands in To Do
@@ -166,6 +176,18 @@ final class MCPTools {
             readOnly: false
         ),
         MCPToolDefinition(
+            name: "edit_card",
+            title: "Rename or rewrite card",
+            description: "Change a card's title or rewrite its details (Markdown). Only when the user asked you to. The previous title and details are kept in the card's activity. Keep every image line — ![name](attachment:<id>) — where it is; a rewrite that drops one is refused.",
+            properties: [
+                "card_id": cardArgument,
+                "title": ["type": "string", "description": "The new title."],
+                "details": ["type": "string", "description": "The new details, in full — not a diff."],
+            ],
+            required: ["card_id"],
+            readOnly: false
+        ),
+        MCPToolDefinition(
             name: "delete_card",
             title: "Delete card",
             description: "Delete a card from its board, with its subtasks, notes and images. This cannot be undone. Only do it when the user asked you to, or to remove a card you created by mistake. The user is notified, with your reason.",
@@ -190,7 +212,15 @@ final class MCPTools {
         ),
     ]
 
-    static func offers(_ name: String) -> Bool { definitions.contains { $0.name == name } }
+    /// True when the tool exists and the user has not switched it off.
+    static func offers(_ name: String) -> Bool {
+        definitions.contains { $0.name == name } && MCPToolSwitches.shared.isOn(name)
+    }
+
+    /// What `tools/list` shows: every tool the user has left on.
+    static var enabledDefinitions: [MCPToolDefinition] {
+        definitions.filter { MCPToolSwitches.shared.isOn($0.name) }
+    }
 
     /// Sent in `initialize`; clients show it to the model as the server's
     /// standing instructions.
@@ -202,7 +232,8 @@ final class MCPTools {
     3. Before starting a card, call claim_card. Then work.
     4. Record your branch with update_card. When you open a pull request, call update_card with status "review" and pr_url.
     5. Use set_subtask as you finish subtasks, and add_note for anything the user should read.
-    6. Work you find outside the card you are on goes on the board with create_card (pass from_card_id), not into this branch. It waits in To Do for the user. Delete a card only when the user asks, or to undo a card you created by mistake.
+    6. Work you find outside the card you are on goes on the board with create_card (pass from_card_id), not into this branch. It waits in To Do for the user. Rename, rewrite or delete a card only when the user asks — or to undo a card you created by mistake.
+    Some tools may be switched off by the user; a call to one says so. Do not look for a way around it.
     7. The user can leave you notes on a card; get_card returns them in its activity, by "You". Read them before you start and when you resume.
     8. Images in a card's details appear as ![name](attachment:<id>); get_card returns the first few as images you can see.
 
@@ -213,6 +244,9 @@ final class MCPTools {
 
     func call(_ name: String, arguments: [String: Any], client: String) throws -> [String: Any] {
         guard let context else { throw MCPToolError("The board is not open yet. Try again in a moment.") }
+        guard !Self.definitions.contains(where: { $0.name == name }) || MCPToolSwitches.shared.isOn(name) else {
+            throw MCPToolError("“\(name)” is switched off in Pitwall’s Settings. Ask the user if you need it.")
+        }
         switch name {
         case "list_projects": return listProjects(arguments, context: context)
         case "list_cards":    return try listCards(arguments, context: context)
@@ -223,6 +257,7 @@ final class MCPTools {
         case "add_note":      return try addNote(arguments, client: client, context: context)
         case "create_card":   return try createCard(arguments, client: client, context: context)
         case "delete_card":   return try deleteCard(arguments, client: client, context: context)
+        case "edit_card":     return try editCard(arguments, client: client, context: context)
         default:              throw MCPToolError("Unknown tool “\(name)”.")
         }
     }
@@ -524,6 +559,56 @@ final class MCPTools {
         return ["card": card]
     }
 
+    private func editCard(_ arguments: [String: Any], client: String, context: ModelContext) throws -> [String: Any] {
+        let item = try resolveCard(arguments["card_id"], context: context)
+        guard let project = item.project else { throw MCPToolError("That card is not on a board.") }
+        let title = (arguments["title"] as? String).map {
+            $0.trimmingCharacters(in: .whitespacesAndNewlines).replacingOccurrences(of: "\n", with: " ")
+        }
+        let details = (arguments["details"] as? String).map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+        guard title != nil || details != nil else { throw MCPToolError("Nothing to change. Pass title, details or both.") }
+        if let title {
+            guard !title.isEmpty else { throw MCPToolError("A card needs a title.") }
+            guard title.count <= 200 else { throw MCPToolError("Keep the title under 200 characters; put the rest in details.") }
+        }
+        if let details {
+            guard details.count <= 20_000 else { throw MCPToolError("Keep details under 20,000 characters.") }
+            // The reference line is how the card holds its image: drop it and
+            // the image is swept away the next time the card's window closes.
+            let kept = Set(AttachmentReferences.ids(in: details))
+            let dropped = item.attachments.filter { attachment in
+                !attachment.isDeleted
+                    && AttachmentReferences.ids(in: item.details).contains(attachment.uuid)
+                    && !kept.contains(attachment.uuid)
+            }
+            if !dropped.isEmpty {
+                let lines = dropped.map(\.markdownReference)
+                throw MCPToolError("""
+                    That rewrite drops \(dropped.count == 1 ? "an image" : "\(dropped.count) images"). Keep \(dropped.count == 1 ? "this line" : "these lines") \
+                    where \(dropped.count == 1 ? "it belongs" : "they belong"): \(lines.joined(separator: " ")). To remove an image, ask the user.
+                    """)
+            }
+        }
+
+        try mutate(project, context: context) {
+            if let title, title != item.title {
+                let old = item.title
+                item.title = title
+                record(item, client: client, tool: "edit_card", summary: "Renamed from “\(old)”", context: context)
+            }
+            if let details, details != item.details {
+                let old = item.details
+                item.details = details
+                // The old notes, kept where the user will see them, so a
+                // rewrite they did not want can be put back by hand.
+                let kept = old.count > 10_000 ? String(old.prefix(10_000)) + "\n…" : old
+                record(item, client: client, tool: "edit_card", summary: "Rewrote the details",
+                       note: old.isEmpty ? nil : "Before:\n\n" + kept, context: context)
+            }
+        }
+        return ["card": summary(item)]
+    }
+
     /// Cards an agent may delete on one board in an hour.
     static let deleteLimitPerHour = 20
     /// When each recent deletion happened, by project. In memory: a deleted
@@ -690,5 +775,30 @@ final class MCPTools {
 
     private static func iso8601(_ date: Date) -> String {
         date.formatted(.iso8601)
+    }
+}
+
+// MARK: - Switches
+
+/// Which tools the user has switched off, in `UserDefaults` — a preference,
+/// not board data. Stored as the names switched *off*, so a tool added later
+/// arrives switched on, as the ones before it did.
+@MainActor
+@Observable
+final class MCPToolSwitches {
+    static let shared = MCPToolSwitches()
+    static let key = "mcpDisabledTools"
+
+    private(set) var disabled: Set<String>
+
+    private init() {
+        disabled = Set(UserDefaults.standard.stringArray(forKey: Self.key) ?? [])
+    }
+
+    func isOn(_ tool: String) -> Bool { !disabled.contains(tool) }
+
+    func set(_ tool: String, on: Bool) {
+        if on { disabled.remove(tool) } else { disabled.insert(tool) }
+        UserDefaults.standard.set(disabled.sorted(), forKey: Self.key)
     }
 }

@@ -247,11 +247,13 @@ struct SettingsView: View {
         .frame(minHeight: 50)
     }
 
-    /// Read-only: these are the tools that exist, not switches. A checkbox
-    /// that cannot be unchecked would be a lie, so they are drawn as marks.
+    /// The summary marks are read from the tools and their switches, not
+    /// switches themselves: "rename" is one tool, but "read boards" is three.
+    /// The switches are per tool, in the list under it.
     private var permissionsGroup: some View {
         SettingsSection(title: "What agents may do") {
-            Button(showsAllTools ? "Hide tools" : "See all \(MCPTools.definitions.count) tools") {
+            Button(showsAllTools ? "Hide tools"
+                   : "Choose tools · \(MCPTools.enabledDefinitions.count) of \(MCPTools.definitions.count) on") {
                 withAnimation(.snappy) { showsAllTools.toggle() }
             }
             .buttonStyle(.link)
@@ -271,7 +273,7 @@ struct SettingsView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     VStack(alignment: .leading, spacing: 10) {
                         Permission("Set branch and PR link", allowed: MCPTools.offers("update_card"))
-                        Permission("Rename or rewrite cards", allowed: false)
+                        Permission("Rename or rewrite cards", allowed: MCPTools.offers("edit_card"))
                         Permission("Delete cards", allowed: MCPTools.offers("delete_card"))
                     }
                     .frame(maxWidth: .infinity, alignment: .leading)
@@ -290,10 +292,20 @@ struct SettingsView: View {
                                 .foregroundStyle(.secondary)
                                 .fixedSize(horizontal: false, vertical: true)
                             Spacer(minLength: 8)
-                            Text(tool.readOnly ? "Reads" : "Changes")
+                            Text(tool.readOnly ? "Reads" : tool.destructive ? "Deletes" : "Changes")
                                 .font(.system(size: 10, weight: .semibold))
-                                .foregroundStyle(tool.readOnly ? AnyShapeStyle(.secondary) : AnyShapeStyle(Theme.agentText))
+                                .foregroundStyle(tool.readOnly ? AnyShapeStyle(.secondary)
+                                                 : tool.destructive ? AnyShapeStyle(.red) : AnyShapeStyle(Theme.agentText))
+                            Toggle(tool.title, isOn: Binding(
+                                get: { MCPToolSwitches.shared.isOn(tool.name) },
+                                set: { MCPToolSwitches.shared.set(tool.name, on: $0) }
+                            ))
+                            .labelsHidden()
+                            .toggleStyle(.switch)
+                            .controlSize(.mini)
+                            .help("Switched off, agents cannot see or call \(tool.name).")
                         }
+                        .opacity(MCPToolSwitches.shared.isOn(tool.name) ? 1 : 0.55)
                         .padding(.horizontal, 14)
                         .padding(.vertical, 9)
                     }

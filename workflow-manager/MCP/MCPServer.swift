@@ -368,7 +368,9 @@ final class MCPServer {
         case "ping":
             return Self.rpcResult(id: id, [:])
         case "tools/list":
-            return Self.rpcResult(id: id, ["tools": MCPTools.definitions.map(\.json)])
+            // Switched-off tools are left out; `call` refuses them too, for a
+            // session that listed them before they were switched off.
+            return Self.rpcResult(id: id, ["tools": MCPTools.enabledDefinitions.map(\.json)])
         case "tools/call":
             return Self.rpcResult(id: id, callTool(params, session: session))
         default:
