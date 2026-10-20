@@ -9,9 +9,16 @@
 #
 # Signing, decided by which secrets are set:
 #
-#   Developer ID, notarized — when all four are set. Opens with no warning.
+#   Developer ID, notarized — when the certificate and one way of reaching
+#   the notary service are set. Opens with no warning.
 #     DEVELOPER_ID_CERTIFICATE_P12        base64 of the exported .p12
 #     DEVELOPER_ID_CERTIFICATE_PASSWORD   the password it was exported with
+#   and either an App Store Connect API key (preferred: no personal password,
+#   and it survives an Apple ID password change)
+#     NOTARY_API_KEY_P8                   the AuthKey_<id>.p8 file, as is
+#     NOTARY_API_KEY_ID                   its key id
+#     NOTARY_API_ISSUER_ID                its issuer id
+#   or an Apple ID
 #     NOTARY_APPLE_ID                     the Apple ID email
 #     NOTARY_APP_PASSWORD                 an app-specific password for it
 #   (APPLE_TEAM_ID is optional; release.sh defaults to the project's team.)
@@ -19,6 +26,13 @@
 #   Ad-hoc — when they are not. The DMG works, but macOS refuses the first
 #   launch until the user clicks Open Anyway in Privacy & Security; the
 #   release notes say so.
+#
+# Auto-update — when SPARKLE_PRIVATE_KEY is set, the release also gets an
+# appcast.xml: one item naming this DMG, signed with that key. Installed copies
+# read releases/latest/download/appcast.xml, which GitHub redirects to the
+# newest release's copy, so publishing a release is what ships an update.
+#     SPARKLE_PRIVATE_KEY   the EdDSA private key, as `generate_keys -x` writes it
+# Without it the release still builds; installed copies just never hear of it.
 #
 # Pull requests that touch the release path build an ad-hoc DMG as an
 # artifact, so a broken release is found before a release is cut.
@@ -53,7 +67,8 @@ jobs:
     timeout-minutes: 60
 
     env:
-      HAS_DEVELOPER_ID: ${{ secrets.DEVELOPER_ID_CERTIFICATE_P12 != '' && secrets.NOTARY_APPLE_ID != '' }}
+      HAS_DEVELOPER_ID: ${{ secrets.DEVELOPER_ID_CERTIFICATE_P12 != '' && (secrets.NOTARY_API_KEY_P8 != '' || secrets.NOTARY_APPLE_ID != '') }}
+      HAS_SPARKLE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY != '' }}
 
     steps:
       - uses: actions/checkout@v4
@@ -91,6 +106,9 @@ jobs:
         env:
           CERTIFICATE_P12: ${{ secrets.DEVELOPER_ID_CERTIFICATE_P12 }}
           CERTIFICATE_PASSWORD: ${{ secrets.DEVELOPER_ID_CERTIFICATE_PASSWORD }}
+          NOTARY_API_KEY_P8: ${{ secrets.NOTARY_API_KEY_P8 }}
+          NOTARY_API_KEY_ID: ${{ secrets.NOTARY_API_KEY_ID }}
+          NOTARY_API_ISSUER_ID: ${{ secrets.NOTARY_API_ISSUER_ID }}
           NOTARY_APPLE_ID: ${{ secrets.NOTARY_APPLE_ID }}
           NOTARY_APP_PASSWORD: ${{ secrets.NOTARY_APP_PASSWORD }}
           TEAM_ID: ${{ secrets.APPLE_TEAM_ID || 'R3YZ9PF9N6' }}
@@ -118,9 +136,20 @@ jobs:
           # shellcheck disable=SC2086
           security list-keychains -d user -s "$KEYCHAIN" $EXISTING
 
-          xcrun notarytool store-credentials ClaudeWM \
-            --apple-id "$NOTARY_APPLE_ID" --team-id "$TEAM_ID" \
-            --password "$NOTARY_APP_PASSWORD" --keychain "$KEYCHAIN"
+          # Either way it becomes the same keychain profile, so release.sh
+          # neither knows nor cares which.
+          if [ -n "$NOTARY_API_KEY_P8" ]; then
+            KEY_FILE="$RUNNER_TEMP/AuthKey.p8"
+            printf '%s\n' "$NOTARY_API_KEY_P8" > "$KEY_FILE"
+            xcrun notarytool store-credentials ClaudeWM \
+              --key "$KEY_FILE" --key-id "$NOTARY_API_KEY_ID" \
+              --issuer "$NOTARY_API_ISSUER_ID" --keychain "$KEYCHAIN"
+            rm -f "$KEY_FILE"
+          else
+            xcrun notarytool store-credentials ClaudeWM \
+              --apple-id "$NOTARY_APPLE_ID" --team-id "$TEAM_ID" \
+              --password "$NOTARY_APP_PASSWORD" --keychain "$KEYCHAIN"
+          fi
 
           echo "NOTARY_KEYCHAIN=$KEYCHAIN" >> "$GITHUB_ENV"
           echo "TEAM_ID=$TEAM_ID" >> "$GITHUB_ENV"
@@ -182,6 +211,56 @@ jobs:
               *) gh release edit "$TAG" --notes "$BODY$NOTE" ;;
             esac
           fi
+
+      # After the DMG is attached, so the feed never names a file that is not
+      # there yet. One item, not a history: the feed is only ever read at the
+      # newest release, so it only ever needs to name that release's DMG.
+      # sparkle:version is CFBundleVersion (the run number), which is what
+      # Sparkle compares; the marketing version is only shown.
+      - name: Write the appcast
+        if: github.event_name == 'release' && env.HAS_SPARKLE_KEY == 'true'
+        env:
+          SPARKLE_PRIVATE_KEY: ${{ secrets.SPARKLE_PRIVATE_KEY }}
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.release.tag_name }}
+          DMG: ${{ steps.dmg.outputs.path }}
+          VERSION: ${{ steps.version.outputs.version }}
+          BUILD_NUMBER: ${{ github.run_number }}
+        run: |
+          SIGN_UPDATE=.xcbuild/SourcePackages/artifacts/sparkle/Sparkle/bin/sign_update
+          [ -x "$SIGN_UPDATE" ] || { echo "sign_update not found at $SIGN_UPDATE"; exit 1; }
+          # Prints: sparkle:edSignature="…" length="…"
+          SIGNATURE=$(printf '%s' "$SPARKLE_PRIVATE_KEY" | "$SIGN_UPDATE" --ed-key-file - "$DMG")
+
+          URL="https://github.com/${{ github.repository }}/releases/download/$TAG/$(basename "$DMG")"
+          PAGE="https://github.com/${{ github.repository }}/releases/tag/$TAG"
+          # The release notes, shown in Sparkle's window. Escaped as HTML and
+          # kept as written, rather than rendered: a half-rendered Markdown
+          # reads worse than the source.
+          NOTES=$(gh release view "$TAG" --json body --jq .body \
+            | sed -e 's/&/\&amp;/g' -e 's/</\&lt;/g' -e 's/>/\&gt;/g')
+
+          cat > appcast.xml <<XML
+          <?xml version="1.0" encoding="utf-8"?>
+          <rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle">
+            <channel>
+              <title>Pitwall</title>
+              <item>
+                <title>Pitwall $VERSION</title>
+                <pubDate>$(LC_ALL=C date -u '+%a, %d %b %Y %H:%M:%S +0000')</pubDate>
+                <sparkle:version>$BUILD_NUMBER</sparkle:version>
+                <sparkle:shortVersionString>$VERSION</sparkle:shortVersionString>
+                <sparkle:minimumSystemVersion>14.0</sparkle:minimumSystemVersion>
+                <sparkle:fullReleaseNotesLink>$PAGE</sparkle:fullReleaseNotesLink>
+                <description><![CDATA[<div style="font: 13px -apple-system, sans-serif; white-space: pre-wrap">$NOTES</div>]]></description>
+                <enclosure url="$URL" type="application/octet-stream" $SIGNATURE />
+              </item>
+            </channel>
+          </rss>
+          XML
+          xmllint --noout appcast.xml
+          cat appcast.xml
+          gh release upload "$TAG" appcast.xml --clobber
 
       - name: Remove the keychain
         if: always() && env.NOTARY_KEYCHAIN != ''

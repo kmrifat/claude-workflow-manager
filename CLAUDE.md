@@ -644,6 +644,11 @@ temporary keychain holding the certificate and a notarytool profile, imported
 from repository secrets — so a Mac and CI build the same way. Things it
 relies on:
 
+- **Notarization in CI uses an App Store Connect API key** (`NOTARY_API_KEY_*`)
+  when one is set, else an Apple ID and app-specific password. Both become
+  the same `ClaudeWM` keychain profile, so `release.sh` cannot tell which. The
+  key is preferred: an app-specific password is revoked by any Apple ID
+  password change, and fails as a bare 401.
 - **`SIGNING=manual` in CI, never `automatic`.** Automatic signing asks Xcode
   for a signed-in Apple account, which a runner does not have. Manual names
   the certificate; a Developer ID app with no restricted entitlements needs no
@@ -657,6 +662,31 @@ relies on:
   and could not have signed anything.
 - Pull requests touching the workflow or the script build an ad-hoc DMG as an
   artifact, so a broken release path shows up before a release is cut.
+
+**Updates are Sparkle, fed from GitHub releases** (`App/AppUpdater.swift`).
+No update server: `SUFeedURL` is `releases/latest/download/appcast.xml`, which
+GitHub redirects to that asset on the newest non-prerelease, and the workflow
+attaches a one-item appcast to every release *after* the DMG, so the feed never
+names a file that is not there yet. Things to know:
+
+- **`sparkle:version` is `CFBundleVersion`, the workflow's run number** — that
+  is what Sparkle compares. A local `Tools/release.sh` build without
+  `BUILD_NUMBER` is build 1 and will be offered every release.
+- **The EdDSA key is the trust, not the Developer ID.** `SUPublicEDKey` is in
+  `Info.plist`; the private half is the `SPARKLE_PRIVATE_KEY` secret and the
+  owner's login keychain (`generate_keys --account pitwall`). Ad-hoc builds update too — the
+  signature is checked either way. Lose the private key and no installed copy
+  accepts an update again; rotating it needs one release signed by both.
+- **Debug builds never start the updater**: a dev build's version is whatever
+  the project says, so it would always offer to replace itself with the
+  release. `-EnableUpdater` starts it, `-UpdateFeedURL <url>` points it at a
+  test feed.
+- Automatic checks and installs are on by default (`SUEnableAutomaticChecks`,
+  `SUAutomaticallyUpdate`), switchable in Settings › Updates; an automatic
+  install happens on quit.
+- Sparkle is pinned `exactVersion` like SwiftTerm, and only the Mac target
+  links it. Its tools (`sign_update`, `generate_keys`) come with the resolved
+  package, under `.xcbuild/SourcePackages/artifacts/sparkle/Sparkle/bin/`.
 
 ## The phone client
 

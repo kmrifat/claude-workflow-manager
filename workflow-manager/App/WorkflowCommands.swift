@@ -23,6 +23,10 @@ extension Notification.Name {
 
 struct WorkflowCommands: Commands {
     var body: some Commands {
+        CommandGroup(after: .appInfo) {
+            CheckForUpdatesButton()
+        }
+
         CommandGroup(replacing: .newItem) {
             Button("New Project…") {
                 NotificationCenter.default.post(name: .newProjectRequested, object: nil)
@@ -79,5 +83,16 @@ struct WorkflowCommands: Commands {
             }
             .keyboardShortcut("?", modifiers: .command)
         }
+    }
+}
+
+/// A view rather than a plain button so the menu item follows
+/// `AppUpdater.canCheck`: Commands bodies are not re-evaluated on their own.
+private struct CheckForUpdatesButton: View {
+    private let updater = AppUpdater.shared
+
+    var body: some View {
+        Button("Check for Updates…") { updater.checkForUpdates() }
+            .disabled(!updater.canCheck)
     }
 }
