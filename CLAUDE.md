@@ -644,6 +644,11 @@ temporary keychain holding the certificate and a notarytool profile, imported
 from repository secrets — so a Mac and CI build the same way. Things it
 relies on:
 
+- **Notarization in CI uses an App Store Connect API key** (`NOTARY_API_KEY_*`)
+  when one is set, else an Apple ID and app-specific password. Both become
+  the same `ClaudeWM` keychain profile, so `release.sh` cannot tell which. The
+  key is preferred: an app-specific password is revoked by any Apple ID
+  password change, and fails as a bare 401.
 - **`SIGNING=manual` in CI, never `automatic`.** Automatic signing asks Xcode
   for a signed-in Apple account, which a runner does not have. Manual names
   the certificate; a Developer ID app with no restricted entitlements needs no

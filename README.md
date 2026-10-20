@@ -219,8 +219,8 @@ gh release create v1.2.0 --generate-notes
 
 Without signing secrets the app is ad-hoc signed, and the workflow adds a
 first-launch note to the release. For a build that opens with no warning, add
-a Developer ID certificate and notarization credentials as repository secrets,
-once:
+a Developer ID certificate and a way to reach Apple's notary service as
+repository secrets, once:
 
 ```bash
 base64 -i DeveloperID.p12 | gh secret set DEVELOPER_ID_CERTIFICATE_P12
@@ -230,17 +230,28 @@ base64 -i DeveloperID.p12 | gh secret set DEVELOPER_ID_CERTIFICATE_P12
 gh secret set DEVELOPER_ID_CERTIFICATE_PASSWORD
 ```
 
+For notarization, an App Store Connect API key (Users and Access › Integrations,
+Developer access or higher) is preferred over an Apple ID: it holds no personal
+password.
+
 ```bash
-gh secret set NOTARY_APPLE_ID
+gh secret set NOTARY_API_KEY_P8 < AuthKey_XXXXXXXXXX.p8
 ```
 
 ```bash
-gh secret set NOTARY_APP_PASSWORD
+gh secret set NOTARY_API_KEY_ID
 ```
+
+```bash
+gh secret set NOTARY_API_ISSUER_ID
+```
+
+Or, instead of the key, an Apple ID and an app-specific password generated at
+appleid.apple.com: `NOTARY_APPLE_ID` and `NOTARY_APP_PASSWORD`.
 
 `DeveloperID.p12` is your "Developer ID Application" certificate exported from
-Keychain Access with its private key; the app password is generated at
-appleid.apple.com. `Tools/release.sh` does the same build on a Mac.
+Keychain Access with its private key. `Tools/release.sh` does the same build on
+a Mac.
 
 #### Updates
 
