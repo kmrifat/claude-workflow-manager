@@ -2,15 +2,22 @@
 //  AppDelegate.swift
 //  workflow-manager
 //
-//  The one thing SwiftUI's app lifecycle cannot do: stop a quit. Files edited
-//  in the Files view and not saved would otherwise vanish with the app, and
-//  an editor that loses typing on ⌘Q is worse than none.
+//  What SwiftUI's app lifecycle cannot do: stop a quit — files edited in the
+//  Files view and not saved would otherwise vanish with the app, and an editor
+//  that loses typing on ⌘Q is worse than none — and start the updater as the
+//  app launches.
 //
 
 import AppKit
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    /// Started here rather than on first use, so the scheduled check runs
+    /// whether or not anyone opens the menu or Settings.
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        _ = AppUpdater.shared
+    }
+
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         let unsaved = FilesStateStore.unsavedFiles
         guard !unsaved.isEmpty else { return .terminateNow }

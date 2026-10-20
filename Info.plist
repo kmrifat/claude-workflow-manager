@@ -39,6 +39,22 @@
 		<string>_claudewm._tcp</string>
 	</array>
 
+	<!--
+	  Sparkle updates (App/AppUpdater.swift). The feed is an asset the release
+	  workflow attaches to every release; GitHub redirects latest/download to
+	  the newest one. An update is installed only if it is signed by the
+	  private half of SUPublicEDKey — the SPARKLE_PRIVATE_KEY secret, and the
+	  `pitwall` account of generate_keys in the owner's keychain.
+	-->
+	<key>SUFeedURL</key>
+	<string>https://github.com/kmrifat/claude-workflow-manager/releases/latest/download/appcast.xml</string>
+	<key>SUPublicEDKey</key>
+	<string>bHo6Y8eDX+CLmvIckbMmpfur6wa6aFxrOAkVI1Y7/XM=</string>
+	<key>SUEnableAutomaticChecks</key>
+	<true/>
+	<key>SUAutomaticallyUpdate</key>
+	<true/>
+
 	<key>UTExportedTypeDeclarations</key>
 	<array>
 		<dict>

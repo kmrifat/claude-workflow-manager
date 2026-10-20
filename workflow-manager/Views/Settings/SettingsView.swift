@@ -21,6 +21,7 @@ enum SettingsPane: String, CaseIterable, Identifiable {
     case claude
     case remote
     case devices
+    case updates
 
     var id: String { rawValue }
 
@@ -29,6 +30,7 @@ enum SettingsPane: String, CaseIterable, Identifiable {
         case .claude:  "Claude & MCP"
         case .remote:  "Remote"
         case .devices: "Devices"
+        case .updates: "Updates"
         }
     }
 }
@@ -53,6 +55,7 @@ struct SettingsView: View {
     @State private var installCheck = 0
     @State private var tokenDraft = ""
     @State private var hostnameDraft = CloudflareTunnel.shared.hostname
+    @State private var updater = AppUpdater.shared
 
     var body: some View {
         ScrollView {
@@ -61,6 +64,7 @@ struct SettingsView: View {
                 case .claude: claudePane
                 case .remote: remotePane
                 case .devices: devicesPane
+                case .updates: updatesPane
                 }
             }
             .frame(maxWidth: 760, alignment: .leading)
@@ -815,6 +819,59 @@ struct SettingsView: View {
                 }
             }
         }
+    }
+
+    // MARK: - Updates
+
+    @ViewBuilder
+    private var updatesPane: some View {
+        hero(
+            symbol: "arrow.down.circle.fill",
+            tint: Color(light: 0x34C759, dark: 0x30D158),
+            title: "Pitwall \(updater.currentVersion)",
+            isOn: nil
+        ) {
+            if !updater.isRunning {
+                StatusLine(color: .secondary, text: "Off in development builds")
+            } else if let last = updater.lastCheck {
+                StatusLine(color: Theme.running,
+                           text: "Last checked \(last.formatted(.relative(presentation: .named)))")
+            } else {
+                StatusLine(color: .secondary, text: "Not checked yet")
+            }
+        } accessory: {
+            Button("Check Now") { updater.checkForUpdates() }
+                .disabled(!updater.canCheck)
+        }
+
+        Text("New versions come from this project’s GitHub releases. Each one is checked against Pitwall’s signing key before it is installed.")
+            .font(.system(size: 12))
+            .foregroundStyle(.secondary)
+            .fixedSize(horizontal: false, vertical: true)
+
+        SettingsSection(title: "Automatic updates") {
+            SettingsGroup {
+                GroupRow(
+                    title: "Check for updates automatically",
+                    subtitle: "Once a day, in the background."
+                ) {
+                    Toggle("Check automatically", isOn: $updater.checksAutomatically)
+                        .toggleStyle(.switch)
+                        .labelsHidden()
+                }
+                GroupDivider()
+                GroupRow(
+                    title: "Download and install updates",
+                    subtitle: "Installed when you quit Pitwall. Off: you are asked first."
+                ) {
+                    Toggle("Install automatically", isOn: $updater.installsAutomatically)
+                        .toggleStyle(.switch)
+                        .labelsHidden()
+                }
+                .disabled(!updater.checksAutomatically)
+            }
+        }
+        .disabled(!updater.isRunning)
     }
 
     // MARK: - Pieces

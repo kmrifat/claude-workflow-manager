@@ -242,6 +242,27 @@ gh secret set NOTARY_APP_PASSWORD
 Keychain Access with its private key; the app password is generated at
 appleid.apple.com. `Tools/release.sh` does the same build on a Mac.
 
+#### Updates
+
+Installed copies update themselves through [Sparkle](https://sparkle-project.org):
+once a day they read `releases/latest/download/appcast.xml`, which the workflow
+attaches to every release, and install the new version when you quit. **Check
+for Updates…** is in the Pitwall menu. Every update is verified against the
+public key in `Info.plist` before it is installed, so the workflow needs the
+matching private key, once:
+
+```bash
+.xcbuild/SourcePackages/artifacts/sparkle/Sparkle/bin/generate_keys --account pitwall -x sparkle-private-key
+```
+
+```bash
+gh secret set SPARKLE_PRIVATE_KEY < sparkle-private-key
+```
+
+Then delete the exported file; the key also lives in your login keychain.
+Without the secret a release still builds, but nobody is offered it. **Losing
+the key means no installed copy will ever accept another update.**
+
 ---
 
 ## WorkflowHost (the daemon)
