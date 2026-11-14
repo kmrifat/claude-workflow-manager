@@ -1,0 +1,40 @@
+{
+  "name": "pitwall-context-relay",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "ghuri": {
+    "settings": "src/settings.ts"
+  },
+  "scripts": {
+    "dev": "ghuri runserver",
+    "deploy": "ghuri deploy",
+    "migrate": "ghuri migrate",
+    "makemigrations": "ghuri makemigrations",
+    "check": "ghuri check",
+    "test": "ghuri test",
+    "typecheck": "tsc --noEmit",
+    "ghuri": "ghuri"
+  },
+  "dependencies": {
+    "@ghuri/core": "0.1.0-alpha.3",
+    "@ghuri/orm": "0.1.0-alpha.4",
+    "@ghuri/rest": "0.1.0-alpha.2",
+    "@ghuri/storage": "0.1.0-alpha.1",
+    "drizzle-orm": "0.45.4",
+    "hono": "4.13.18",
+    "postgres": "4.1.0"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "5.20261113.1",
+    "@ghuri/cli": "0.1.0-alpha.5",
+    "@types/node": "24.19.2",
+    "better-sqlite3": "13.1.1",
+    "typescript": "5.9.3",
+    "vitest": "5.1.0",
+    "wrangler": "4.162.0"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

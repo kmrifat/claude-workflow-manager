@@ -1,0 +1,4 @@
+# Copy to .dev.vars for `ghuri runserver` / `ghuri migrate`. Never commit .dev.vars.
+SECRET_KEY=dev-only-not-secret
+OWNER_KEY=pwo_dev-only-not-secret
+DEBUG=true

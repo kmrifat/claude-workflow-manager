@@ -1,0 +1,4 @@
+node_modules/
+.wrangler/
+# Local secrets (OWNER_KEY, SECRET_KEY). Production secrets go in `wrangler secret put`.
+.dev.vars
