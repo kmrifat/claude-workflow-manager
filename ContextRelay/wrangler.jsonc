@@ -1,0 +1,42 @@
+// ContextRelay: the Worker a team deploys so its members' Pitwall apps can share
+// agent context. Everything sensitive is a secret, set with `wrangler secret put
+// NAME`, never here — this file is in the repository:
+//   OWNER_KEY   long random string; Pitwall's Settings › Team mints it. Only it can
+//               add or remove members.
+//   SECRET_KEY  Ghuri's signing key. Nothing here signs cookies, but Ghuri expects one.
+{
+  "$schema": "node_modules/wrangler/config-schema.json",
+  "name": "pitwall-context-relay",
+  "main": "src/index.ts",
+  "compatibility_date": "2026-11-01",
+  // Ghuri needs Node.js APIs on Workers (AsyncLocalStorage, Buffer, …).
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": { "enabled": true },
+  // Served at https://pitwall-context-relay.<subdomain>.workers.dev. No per-version
+  // preview URLs: there is nothing to preview, and each one is another address to guard.
+  "workers_dev": true,
+  "preview_urls": false,
+
+  // Members, log entries, the Brief and presence. Create it, then paste the
+  // printed id here:  npx wrangler d1 create pitwall-ctx
+  "d1_databases": [
+    {
+      "binding": "DB",
+      "database_name": "pitwall-ctx",
+      "database_id": "51c09cc8-b3f8-4c16-984a-4c88c25fc2e6"
+    }
+  ],
+
+  // Every replaced Brief revision, for History and undo.
+  //   npx wrangler r2 bucket create pitwall-ctx-archive
+  "r2_buckets": [
+    {
+      "binding": "ARCHIVE",
+      "bucket_name": "pitwall-ctx-archive"
+    }
+  ],
+
+  "vars": {
+    "DEBUG": "false"
+  }
+}

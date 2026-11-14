@@ -106,6 +106,21 @@ if [ -z "${SKIP_NOTARIZE:-}" ]; then
     fi
 fi
 
+# The installer window is laid out by dmgbuild, pinned and kept in its own
+# virtualenv beside the build so nothing is installed into the system Python.
+# It writes Finder's .DS_Store directly; the alternative, scripting Finder over
+# AppleScript, needs a logged-in Finder and an Automation grant, and is the
+# usual reason a styled DMG comes out plain on a CI runner.
+DMGBUILD_VENV="$PWD/.xcbuild/dmgbuild-venv"
+DMGBUILD_PINS=(dmgbuild==1.6.7 ds_store==1.3.3 mac_alias==2.2.3)
+if [ "$("$DMGBUILD_VENV/bin/python" -c 'import importlib.metadata as m; print(m.version("dmgbuild"))' 2>/dev/null)" != 1.6.7 ]; then
+    say "Installing dmgbuild"
+    rm -rf "$DMGBUILD_VENV"
+    python3 -m venv "$DMGBUILD_VENV" || die "python3 -m venv failed; dmgbuild needs Python 3."
+    "$DMGBUILD_VENV/bin/pip" install --quiet --disable-pip-version-check "${DMGBUILD_PINS[@]}" \
+        || die "Could not install ${DMGBUILD_PINS[*]}."
+fi
+
 rm -rf "$OUT"
 mkdir -p "$OUT"
 
@@ -239,17 +254,24 @@ fi
 
 # --- Package ---------------------------------------------------------------
 
-say "Building the disk image"
-STAGE="$OUT/dmg"
-mkdir -p "$STAGE"
-cp -R "$APP" "$STAGE/"
-ln -s /Applications "$STAGE/Applications"
-hdiutil create \
-    -volname "$APP_NAME" \
-    -srcfolder "$STAGE" \
-    -ov -format UDZO \
-    "$DMG" >/dev/null
-rm -rf "$STAGE"
+# The window it opens to: Pitwall on the left, Applications on the right, an
+# arrow between, on a background drawn by Tools/RenderDMGBackground.swift. The
+# 1x and 2x renders go into one TIFF, which is how Finder picks the sharp one
+# on a Retina screen.
+say "Building the installer disk image"
+ASSETS="$OUT/dmg-assets"
+xcrun swift Tools/RenderDMGBackground.swift "$ASSETS" >/dev/null \
+    || die "Could not render the installer background."
+tiffutil -cathidpicheck "$ASSETS/background.png" "$ASSETS/background@2x.png" \
+    -out "$ASSETS/background.tiff" 2>/dev/null
+"$DMGBUILD_VENV/bin/dmgbuild" \
+    -s Tools/dmgbuild-settings.py \
+    -D app="$APP" \
+    -D background="$ASSETS/background.tiff" \
+    -D icon="$APP/Contents/Resources/AppIcon.icns" \
+    "$APP_NAME" "$DMG" > "$OUT/dmgbuild.log" 2>&1 \
+    || { tail -20 "$OUT/dmgbuild.log" >&2; die "dmgbuild failed. Full log: $OUT/dmgbuild.log"; }
+rm -rf "$ASSETS"
 
 if [ -z "${SKIP_NOTARIZE:-}" ]; then
     say "Notarizing the disk image"
